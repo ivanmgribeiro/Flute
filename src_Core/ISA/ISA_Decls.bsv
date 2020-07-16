@@ -90,6 +90,31 @@ typedef  Vector #(Bytes_per_WordXL, Byte)      WordXL_B;
 
 typedef  XLEN                                  Bits_per_Addr;
 typedef  TDiv #(Bits_per_Addr, Bits_per_Byte)  Bytes_per_Addr;
+interface Decode_IFC;
+   (* always_ready *)
+   method Decoded_Instr get_outputs();
+
+   (* always_ready *)
+   method Action put_inputs(Instr instr);
+endinterface
+
+(* synthesize *)
+module mkDecode (Decode_IFC);
+   Wire#(Instr) inputs <- mkDWire (?);
+   Wire#(Decoded_Instr) outputs <- mkDWire (?);
+
+   rule assign_outputs;
+      outputs <= fv_decode(inputs);
+   endrule
+
+   method Decoded_Instr get_outputs = outputs;
+
+   method Action put_inputs(Instr instr);
+      inputs <= instr;
+   endmethod
+endmodule
+
+
 
 Integer  bits_per_byte           = valueOf (Bits_per_Byte);
 

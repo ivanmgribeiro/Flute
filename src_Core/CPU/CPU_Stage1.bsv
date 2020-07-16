@@ -45,6 +45,8 @@ import EX_ALU_functions :: *;
 import CPU_Decode_C     :: *;
 `endif
 
+import CPU_Stage1_syn :: *;
+
 // ================================================================
 // Interface
 
@@ -70,6 +72,13 @@ endinterface
 // ================================================================
 // Implementation module
 
+(* synthesize *)
+module mkRegUSynth_Dto1 (Reg#(Data_StageD_to_Stage1));
+    let rg <- mkRegU;
+    return rg;
+endmodule
+
+
 module mkCPU_Stage1 #(Bit #(4)         verbosity,
 		      GPR_RegFile_IFC  gpr_regfile,
 		      Bypass           bypass_from_stage2,
@@ -88,7 +97,7 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    FIFOF #(Token) f_reset_rsps <- mkFIFOF;
 
    Reg #(Bool)                  rg_full        <- mkReg (False);
-   Reg #(Data_StageD_to_Stage1) rg_stage_input <- mkRegU;
+   Reg #(Data_StageD_to_Stage1) rg_stage_input <- mkRegUSynth_Dto1;
 
    MISA misa   = csr_regfile.read_misa;
    Bit #(2) xl = ((xlen == 32) ? misa_mxl_32 : misa_mxl_64);
@@ -171,139 +180,39 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 				mstatus        : csr_regfile.read_mstatus,
 				misa           : csr_regfile.read_misa };
 
-   let alu_outputs = fv_ALU (alu_inputs);
+   ALU_IFC alu_wrapper <- mkALU;
+   //let alu_outputs = fv_ALU (alu_inputs);
+   //ALU_Outputs alu_outputs <- alu_unique_wrapper.func(alu_inputs);
+   let alu_outputs = alu_wrapper.get_outputs;
 
-   let data_to_stage2 = Data_Stage1_to_Stage2 {pc            : rg_stage_input.pc,
-					       instr         : rg_stage_input.instr,
-					       op_stage2     : alu_outputs.op_stage2,
-					       rd            : alu_outputs.rd,
-					       addr          : alu_outputs.addr,
-					       val1          : alu_outputs.val1,
-					       val2          : alu_outputs.val2,
-`ifdef ISA_F
-					       fval1         : alu_outputs.fval1,
-					       fval2         : alu_outputs.fval2,
-					       fval3         : alu_outputs.fval3,
-					       rd_in_fpr     : alu_outputs.rd_in_fpr,
-					       rs_frm_fpr    : alu_outputs.rs_frm_fpr,
-					       val1_frm_gpr  : alu_outputs.val1_frm_gpr,
-					       rounding_mode : alu_outputs.rm,
-`endif
-`ifdef INCLUDE_TANDEM_VERIF
-					       trace_data    : alu_outputs.trace_data,
-`endif
-					       priv          : cur_priv };
+
+   rule assign_alu_inputs;
+      alu_wrapper.put_inputs(alu_inputs);
+   endrule
 
    // ----------------
    // Combinational output function
 
-   function Output_Stage1 fv_out;
-      Output_Stage1 output_stage1 = ?;
+   let stage1_wrapper <- mkCPU_Stage1_syn;
 
-      // This stage is empty
-      if (! rg_full) begin
-	 output_stage1.ostatus = OSTATUS_EMPTY;
-      end
-
-      // Wrong branch-prediction epoch: discard instruction (convert into a NOOP)
-      else if (rg_stage_input.epoch != cur_epoch) begin
-	 output_stage1.ostatus = OSTATUS_PIPE;
-	 output_stage1.control = CONTROL_DISCARD;
-
-	 // For debugging only
-	 let data_to_stage2 = Data_Stage1_to_Stage2 {pc:        rg_stage_input.pc,
-						     instr:     rg_stage_input.instr,
-						     op_stage2: OP_Stage2_ALU,
-						     rd:        0,
-						     addr:      ?,
-						     val1:      ?,
-						     val2:      ?,
+   rule assign_stage1_inputs;
+   stage1_wrapper.put_inputs(rg_full,
+                             rg_stage_input,
+                             cur_epoch,
+                             rs1_busy,
+                             rs2_busy,
 `ifdef ISA_F
-						     fval1           : ?,
-						     fval2           : ?,
-						     fval3           : ?,
-						     rd_in_fpr       : ?,
-					             rs_frm_fpr      : ?,
-					             val1_frm_gpr    : ?,
-						     rounding_mode   : ?,
+                             frs1_busy,
+                             frs2_busy,
+                             frs3_busy,
 `endif
-`ifdef INCLUDE_TANDEM_VERIF
-						     trace_data: alu_outputs.trace_data,
-`endif
-						     priv:      cur_priv
-						     };
+                             alu_outputs,
+                             cur_priv);
+   endrule
 
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
+   let fv_out = stage1_wrapper.get_outputs;
 
-      // Stall if bypass pending for GPR rs1 or rs2
-      else if (rs1_busy || rs2_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
 
-`ifdef ISA_F
-      // Stall if bypass pending for FPR rs1, rs2 or rs3
-      else if (frs1_busy || frs2_busy || frs3_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
-`endif
-
-      // Trap on fetch-exception
-      else if (rg_stage_input.exc) begin
-	 output_stage1.ostatus   = OSTATUS_NONPIPE;
-	 output_stage1.control   = CONTROL_TRAP;
-	 output_stage1.trap_info = Trap_Info {epc:      rg_stage_input.pc,
-					      exc_code: rg_stage_input.exc_code,
-					      tval:     rg_stage_input.tval};
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-      // ALU outputs: pipe (straight/branch)
-      // and non-pipe (CSRR_W, CSRR_S_or_C, FENCE.I, FENCE, SFENCE_VMA, xRET, WFI, TRAP)
-      else begin
-	 let ostatus = (  (   (alu_outputs.control == CONTROL_STRAIGHT)
-			   || (alu_outputs.control == CONTROL_BRANCH))
-			? OSTATUS_PIPE
-			: OSTATUS_NONPIPE);
-
-	 // Compute MTVAL in case of traps
-	 let tval = 0;
-	 if (alu_outputs.exc_code == exc_code_ILLEGAL_INSTRUCTION) begin
-	    // The instruction
-`ifdef ISA_C
-	    tval = (rg_stage_input.is_i32_not_i16
-		    ? zeroExtend (rg_stage_input.instr)
-		    : zeroExtend (rg_stage_input.instr_C));
-`else
-	    tval = zeroExtend (rg_stage_input.instr);
-`endif
-	 end
-	 else if (alu_outputs.exc_code == exc_code_INSTR_ADDR_MISALIGNED)
-	    tval = alu_outputs.addr;                           // The branch target pc
-	 else if (alu_outputs.exc_code == exc_code_BREAKPOINT)
-	    tval = rg_stage_input.pc;                          // The faulting virtual address
-
-	 let trap_info = Trap_Info {epc:      rg_stage_input.pc,
-				    exc_code: alu_outputs.exc_code,
-				    tval:     tval};
-
-	 let fall_through_pc = rg_stage_input.pc + (rg_stage_input.is_i32_not_i16 ? 4 : 2);
-	 let next_pc = ((alu_outputs.control == CONTROL_BRANCH)
-			? alu_outputs.addr
-			: fall_through_pc);
-	 let redirect = (next_pc != rg_stage_input.pred_pc);
-
-	 output_stage1.ostatus        = ostatus;
-	 output_stage1.control        = alu_outputs.control;
-	 output_stage1.trap_info      = trap_info;
-	 output_stage1.redirect       = redirect;
-	 output_stage1.next_pc        = next_pc;
-	 output_stage1.cf_info        = alu_outputs.cf_info;
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-      return output_stage1;
-   endfunction: fv_out
 
    // ================================================================
    // INTERFACE

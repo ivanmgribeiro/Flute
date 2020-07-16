@@ -62,6 +62,7 @@ endinterface
 // ================================================================
 // Implementation module
 
+(* synthesize *)
 module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
                     (CPU_StageD_IFC);
 
@@ -76,9 +77,20 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
    Instr instr = rg_data.instr;
 `ifdef ISA_C
    Instr_C instr_C = instr [15:0];
+
+   let decode_c_wrapper <- mkDecodeC;
+   rule assign_decode_c_inputs;
+      decode_c_wrapper.put_inputs(misa, xl, instr_C);
+   endrule
+
    if (! rg_data.is_i32_not_i16)
-      instr = fv_decode_C (misa, xl, instr_C);
+      instr = decode_c_wrapper.get_outputs;
 `endif
+
+   let decode_wrapper <- mkDecode;
+   rule assign_decode_inputs;
+      decode_wrapper.put_inputs(instr);
+   endrule
 
    // ----------------------------------------------------------------
    // BEHAVIOR
@@ -93,7 +105,7 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
    // Combinational output function
 
    function Output_StageD fv_out;
-      let decoded_instr = fv_decode (instr);
+      let decoded_instr = decode_wrapper.get_outputs;
 
       Output_StageD  output_stageD = ?;
 

@@ -12,7 +12,8 @@ package EX_ALU_functions;
 export
 ALU_Inputs (..),
 ALU_Outputs (..),
-fv_ALU;
+mkALU,
+ALU_IFC (..);
 
 // ================================================================
 // BSV library imports
@@ -113,6 +114,8 @@ typedef struct {
    } ALU_Outputs
 deriving (Bits, FShow);
 
+typedef Bit #(TAdd#(XLEN, 1)) AdderInt;
+
 CF_Info cf_info_base = CF_Info {cf_op       : CF_None,
 				from_PC     : ?,
 				taken       : ?,
@@ -143,10 +146,33 @@ ALU_Outputs alu_outputs_base
 `endif
 };
 
+interface ALU_IFC;
+   (* always_ready *)
+   method ALU_Outputs get_outputs();
+
+   (* always_ready *)
+   method Action put_inputs(ALU_Inputs in);
+endinterface
+
+(* synthesize *)
+module mkALU (ALU_IFC);
+   Wire#(ALU_Inputs) inputs <- mkDWire (?);
+   Wire#(ALU_Outputs) outputs <- mkDWire (?);
+
+   rule assign_outputs;
+      outputs <= fv_ALU(inputs);
+   endrule
+
+   method ALU_Outputs get_outputs = outputs;
+
+   method Action put_inputs(ALU_Inputs in);
+      inputs <= in;
+   endmethod
+endmodule
+
 // ================================================================
 // The fall-through PC is PC+4 for normal 32b instructions,
 // and PC+2 for 'C' (16b compressed) instructions.
-
 function Addr fall_through_pc (ALU_Inputs  inputs);
    Addr next_pc = inputs.pc + 4;
 `ifdef ISA_C
@@ -225,7 +251,10 @@ endfunction
 // ================================================================
 // BRANCH
 
-function ALU_Outputs fv_BRANCH (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_BRANCH_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
+
    let rs1_val = inputs.rs1_val;
    let rs2_val = inputs.rs2_val;
 
@@ -234,7 +263,24 @@ function ALU_Outputs fv_BRANCH (ALU_Inputs inputs);
    IntXL s_rs2_val = unpack (inputs.rs2_val);
 
    IntXL offset        = extend (unpack (inputs.decoded_instr.imm13_SB));
-   Addr  branch_target = pack (unpack (inputs.pc) + offset);
+   //Addr  branch_target = pack (unpack (inputs.pc) + offset);
+   addop1 = {unpack(inputs.pc), 1'b0};
+   addop2 = {pack(offset), 1'b0};
+
+   return tuple2 (addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_BRANCH (ALU_Inputs inputs, IntXL sum, Addr fallthru_pc);
+   let rs1_val = inputs.rs1_val;
+   let rs2_val = inputs.rs2_val;
+
+   // Signed versions of rs1_val and rs2_val
+   IntXL s_rs1_val = unpack (inputs.rs1_val);
+   IntXL s_rs2_val = unpack (inputs.rs2_val);
+
+   IntXL offset        = extend (unpack (inputs.decoded_instr.imm13_SB));
+   //Addr  branch_target = pack (unpack (inputs.pc) + offset);
+   Addr  branch_target = pack (sum);
    Bool  branch_taken  = False;
    Bool  trap          = False;
 
@@ -261,11 +307,11 @@ function ALU_Outputs fv_BRANCH (ALU_Inputs inputs);
    let cf_info   = CF_Info {cf_op       : CF_BR,
 			    from_PC     : inputs.pc,
 			    taken       : branch_taken,
-			    fallthru_PC : fall_through_pc (inputs),
+			    fallthru_PC : fallthru_pc,
 			    taken_PC    : branch_target };
 
    let alu_outputs = alu_outputs_base;
-   let next_pc     = (branch_taken ? branch_target : fall_through_pc (inputs));
+   let next_pc     = (branch_taken ? branch_target : fallthru_pc);
    alu_outputs.control   = (trap ? CONTROL_TRAP : (branch_taken ? CONTROL_BRANCH : CONTROL_STRAIGHT));
    alu_outputs.exc_code  = exc_code;
    alu_outputs.op_stage2 = OP_Stage2_ALU;
@@ -286,10 +332,18 @@ endfunction
 // ----------------------------------------------------------------
 // JAL
 
-function ALU_Outputs fv_JAL (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_JAL_operands(ALU_Inputs inputs);
    IntXL offset  = extend (unpack (inputs.decoded_instr.imm21_UJ));
-   Addr  next_pc = pack (unpack (inputs.pc) + offset);
-   Addr  ret_pc  = fall_through_pc (inputs);
+   let addop1 = {unpack(inputs.pc), 1'b0};
+   let addop2 = {pack(offset), 1'b0};
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_JAL (ALU_Inputs inputs, IntXL sum, Addr fallthru_pc);
+   IntXL offset  = extend (unpack (inputs.decoded_instr.imm21_UJ));
+   //Addr  next_pc = pack (s_rs1_val + offset);
+   Addr  next_pc = pack (sum);
+   Addr  ret_pc  = fallthru_pc;
 
    Bool misaligned_target = (next_pc [1] == 1'b1);
 `ifdef ISA_C
@@ -325,7 +379,10 @@ endfunction
 // ----------------------------------------------------------------
 // JALR
 
-function ALU_Outputs fv_JALR (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_JALR_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
+
    let rs1_val = inputs.rs1_val;
    let rs2_val = inputs.rs2_val;
 
@@ -333,8 +390,24 @@ function ALU_Outputs fv_JALR (ALU_Inputs inputs);
    IntXL s_rs1_val = unpack (rs1_val);
    IntXL s_rs2_val = unpack (rs2_val);
    IntXL offset    = extend (unpack (inputs.decoded_instr.imm12_I));
-   Addr  next_pc   = pack (s_rs1_val + offset);
-   Addr  ret_pc    = fall_through_pc (inputs);
+   //Addr  next_pc   = pack (s_rs1_val + offset);
+
+   addop1 = {pack(s_rs1_val), 1'b0};
+   addop2 = {pack(offset), 1'b0};
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_JALR (ALU_Inputs inputs, IntXL sum, Addr fallthru_pc);
+   let rs1_val = inputs.rs1_val;
+   let rs2_val = inputs.rs2_val;
+
+   // Signed versions of rs1_val and rs2_val
+   IntXL s_rs1_val = unpack (rs1_val);
+   IntXL s_rs2_val = unpack (rs2_val);
+   IntXL offset    = extend (unpack (inputs.decoded_instr.imm12_I));
+   //Addr  next_pc   = pack (s_rs1_val + offset);
+   Addr  next_pc   = pack (sum);
+   Addr  ret_pc    = fallthru_pc;
 
    // next_pc [0] should be cleared
    next_pc [0] = 1'b0;
@@ -454,7 +527,10 @@ endfunction: fv_OP_and_OP_IMM_shifts
 // ----------------
 // Remaining OP and OP_IMM (excluding shifts, M ops MUL/DIV/REM)
 
-function ALU_Outputs fv_OP_and_OP_IMM (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_OP_and_OP_IMM_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
+
    let rs1_val = inputs.rs1_val;
    let rs2_val = inputs.rs2_val;
 
@@ -477,8 +553,46 @@ function ALU_Outputs fv_OP_and_OP_IMM (ALU_Inputs inputs);
    Bool trap   = False;
    WordXL rd_val = ?;
 
-   if      ((funct3 == f3_ADDI) && (! subtract)) rd_val = pack (s_rs1_val + s_rs2_val_local);
-   else if ((funct3 == f3_ADDI) && (subtract))   rd_val = pack (s_rs1_val - s_rs2_val_local);
+   if ((funct3 == f3_ADDI) && (! subtract)) begin
+      //rd_val = pack (s_rs1_val + s_rs2_val_local);
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(s_rs2_val_local), 1'b0};
+   end else if ((funct3 == f3_ADDI) && (subtract)) begin
+      //rd_val = pack (s_rs1_val - s_rs2_val_local);
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {~pack(s_rs2_val_local), 1'b1};
+   end
+
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_OP_and_OP_IMM (ALU_Inputs inputs, IntXL sum);
+   let rs1_val = inputs.rs1_val;
+   let rs2_val = inputs.rs2_val;
+
+   // Signed versions of rs1_val and rs2_val
+   IntXL  s_rs1_val = unpack (rs1_val);
+   IntXL  s_rs2_val = unpack (rs2_val);
+
+   IntXL  s_rs2_val_local = s_rs2_val;
+   WordXL rs2_val_local   = rs2_val;
+
+   Bit #(1) instr_b30  = inputs.instr [30];
+   Bool     subtract   = ((inputs.decoded_instr.opcode == op_OP) && (instr_b30 == 1'b1));
+
+   if (inputs.decoded_instr.opcode == op_OP_IMM) begin
+      s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+      rs2_val_local   = pack (s_rs2_val_local);
+   end
+
+   let  funct3 = inputs.decoded_instr.funct3;
+   Bool trap   = False;
+   WordXL rd_val = ?;
+
+   //if      ((funct3 == f3_ADDI) && (! subtract)) rd_val = pack (s_rs1_val + s_rs2_val_local);
+   //else if ((funct3 == f3_ADDI) && (subtract))   rd_val = pack (s_rs1_val - s_rs2_val_local);
+   if      ((funct3 == f3_ADDI) && (! subtract)) rd_val = pack (sum);
+   else if ((funct3 == f3_ADDI) && (subtract))   rd_val = pack (sum);
 
    else if (funct3 == f3_SLTI)  rd_val = ((s_rs1_val < s_rs2_val_local) ? 1 : 0);
    else if (funct3 == f3_SLTIU) rd_val = ((rs1_val  < rs2_val_local)  ? 1 : 0);
@@ -508,7 +622,9 @@ endfunction: fv_OP_and_OP_IMM
 // ----------------
 // OP_IMM_32 (ADDIW, SLLIW, SRxIW)
 
-function ALU_Outputs fv_OP_IMM_32 (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_OP_IMM_32_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
    WordXL   rs1_val     = inputs.rs1_val;
    IntXL    s_rs1_val   = unpack (rs1_val);
 
@@ -521,7 +637,29 @@ function ALU_Outputs fv_OP_IMM_32 (ALU_Inputs inputs);
 
    if (funct3 == f3_ADDIW) begin
       IntXL  s_rs2_val = extend (unpack (inputs.decoded_instr.imm12_I));
-      IntXL  sum       = s_rs1_val + s_rs2_val;
+      //IntXL  sum       = s_rs1_val + s_rs2_val;
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(s_rs2_val), 1'b0};
+   end
+
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_OP_IMM_32 (ALU_Inputs inputs, IntXL sum_in);
+   WordXL   rs1_val     = inputs.rs1_val;
+   IntXL    s_rs1_val   = unpack (rs1_val);
+
+   Bit #(5) shamt       = truncate (inputs.decoded_instr.imm12_I);
+   Bool     shamt5_is_0 = (inputs.instr [25] == 1'b0);
+
+   let    funct3 = inputs.decoded_instr.funct3;
+   Bool   trap   = False;
+   WordXL rd_val = ?;
+
+   if (funct3 == f3_ADDIW) begin
+      IntXL  s_rs2_val = extend (unpack (inputs.decoded_instr.imm12_I));
+      //IntXL  sum       = s_rs1_val + s_rs2_val;
+      IntXL  sum       = sum_in;
       WordXL tmp       = pack (sum);
       rd_val           = signExtend (tmp [31:0]);
    end
@@ -566,7 +704,35 @@ endfunction: fv_OP_IMM_32
 // ----------------
 // OP_32 (excluding 'M' ops: MULW/ DIVW/ DIVUW/ REMW/ REMUW)
 
-function ALU_Outputs fv_OP_32 (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_OP_32_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
+
+   Bit #(32) rs1_val = inputs.rs1_val [31:0];
+   Bit #(32) rs2_val = inputs.rs2_val [31:0];
+
+   // Signed version of rs1_val and rs2_val
+   Int #(32) s_rs1_val = unpack (rs1_val);
+   Int #(32) s_rs2_val = unpack (rs2_val);
+
+   let    funct10 = inputs.decoded_instr.funct10;
+   Bool   trap   = False;
+   WordXL rd_val = ?;
+
+   if (funct10 == f10_ADDW) begin
+      //rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(s_rs2_val), 1'b0};
+   end else if (funct10 == f10_SUBW) begin
+      //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {~pack(s_rs2_val), 1'b1};
+   end
+
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_OP_32 (ALU_Inputs inputs, IntXL sum);
    Bit #(32) rs1_val = inputs.rs1_val [31:0];
    Bit #(32) rs2_val = inputs.rs2_val [31:0];
 
@@ -579,10 +745,12 @@ function ALU_Outputs fv_OP_32 (ALU_Inputs inputs);
    WordXL rd_val = ?;
 
    if      (funct10 == f10_ADDW) begin
-      rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
+      //rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
+      rd_val = pack (sum);
    end
    else if (funct10 == f10_SUBW) begin
-      rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
+      //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
+      rd_val = pack (sum);
    end
    else if (funct10 == f10_SLLW) begin
       rd_val = pack (signExtend (rs1_val << (rs2_val [4:0])));
@@ -637,10 +805,26 @@ function ALU_Outputs fv_LUI (ALU_Inputs inputs);
    return alu_outputs;
 endfunction
 
-function ALU_Outputs fv_AUIPC (ALU_Inputs inputs);
+
+
+function Tuple2#(AdderInt, AdderInt) fv_AUIPC_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
+
    IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm20_U, 12'b0}));
    IntXL  pc_s   = unpack (inputs.pc);
-   WordXL rd_val = pack (pc_s + iv);
+   //WordXL rd_val = pack (pc_s + iv);
+   addop1 = {pack(pc_s), 1'b0};
+   addop2 = {pack(iv), 1'b0};
+
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_AUIPC (ALU_Inputs inputs, IntXL sum);
+   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm20_U, 12'b0}));
+   IntXL  pc_s   = unpack (inputs.pc);
+   //WordXL rd_val = pack (pc_s + iv);
+   WordXL rd_val = pack (sum);
 
    let alu_outputs       = alu_outputs_base;
    alu_outputs.op_stage2 = OP_Stage2_ALU;
@@ -661,14 +845,32 @@ endfunction
 // ----------------------------------------------------------------
 // LOAD
 
-function ALU_Outputs fv_LD (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_LD_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
+
    // Signed versions of rs1_val and rs2_val
    let opcode = inputs.decoded_instr.opcode;
    IntXL s_rs1_val = unpack (inputs.rs1_val);
    IntXL s_rs2_val = unpack (inputs.rs2_val);
 
    IntXL  imm_s = extend (unpack (inputs.decoded_instr.imm12_I));
-   WordXL eaddr = pack (s_rs1_val + imm_s);
+   //WordXL eaddr = pack (s_rs1_val + imm_s);
+   addop1 = {pack(s_rs1_val), 1'b0};
+   addop2 = {pack(imm_s), 1'b0};
+
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_LD (ALU_Inputs inputs, IntXL sum);
+   // Signed versions of rs1_val and rs2_val
+   let opcode = inputs.decoded_instr.opcode;
+   IntXL s_rs1_val = unpack (inputs.rs1_val);
+   IntXL s_rs2_val = unpack (inputs.rs2_val);
+
+   IntXL  imm_s = extend (unpack (inputs.decoded_instr.imm12_I));
+   //WordXL eaddr = pack (s_rs1_val + imm_s);
+   WordXL eaddr = pack (sum);
 
    let funct3 = inputs.decoded_instr.funct3;
 
@@ -732,11 +934,26 @@ endfunction
 // ----------------------------------------------------------------
 // STORE
 
-function ALU_Outputs fv_ST (ALU_Inputs inputs);
+function Tuple2#(AdderInt, AdderInt) fv_ST_operands (ALU_Inputs inputs);
+   let addop1 = (?);
+   let addop2 = (?);
+
    // Signed version of rs1_val
    IntXL  s_rs1_val = unpack (inputs.rs1_val);
    IntXL  imm_s     = extend (unpack (inputs.decoded_instr.imm12_S));
-   WordXL eaddr     = pack (s_rs1_val + imm_s);
+   //WordXL eaddr     = pack (s_rs1_val + imm_s);
+   addop1 = {pack(s_rs1_val), 1'b0};
+   addop2 = {pack(imm_s), 1'b0};
+
+   return tuple2(addop1, addop2);
+endfunction
+
+function ALU_Outputs fv_ST (ALU_Inputs inputs, IntXL sum);
+   // Signed version of rs1_val
+   IntXL  s_rs1_val = unpack (inputs.rs1_val);
+   IntXL  imm_s     = extend (unpack (inputs.decoded_instr.imm12_S));
+   //WordXL eaddr     = pack (s_rs1_val + imm_s);
+   WordXL eaddr     = pack (sum);
 
    let opcode = inputs.decoded_instr.opcode;
    let funct3 = inputs.decoded_instr.funct3;
@@ -1062,17 +1279,108 @@ endfunction
 // ----------------------------------------------------------------
 // Top-level ALU function
 
+/*
+    shifters in:
+      fv_OP_and_OP_IMM_shifts
+      fv_OP_IMM_32
+      fv_OP_32
+
+*/
+
+
 function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    let alu_outputs = alu_outputs_base;
+   //
+   // find the operands for the sum
+   //
+   AdderInt addop1 = (?);
+   AdderInt addop2 = (?);
+   let fallthru_pc = fall_through_pc (inputs);
 
-   if (inputs.decoded_instr.opcode == op_BRANCH)
-      alu_outputs = fv_BRANCH (inputs);
+   if (inputs.decoded_instr.opcode == op_BRANCH) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_BRANCH_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (inputs.decoded_instr.opcode == op_JAL) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_JAL_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (inputs.decoded_instr.opcode == op_JALR) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_JALR_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (   (inputs.decoded_instr.opcode == op_OP_IMM)
+	    || (inputs.decoded_instr.opcode == op_OP)) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_OP_and_OP_IMM_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (inputs.decoded_instr.opcode == op_OP_IMM_32) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_OP_IMM_32_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (inputs.decoded_instr.opcode == op_OP_32) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_OP_32_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (inputs.decoded_instr.opcode == op_AUIPC) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_AUIPC_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (inputs.decoded_instr.opcode == op_LOAD) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_LD_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (inputs.decoded_instr.opcode == op_STORE) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_ST_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+`ifdef ISA_F
+   else if (   (inputs.decoded_instr.opcode == op_LOAD_FP)) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_LD_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+
+   else if (   (inputs.decoded_instr.opcode == op_STORE_FP)) begin
+      match {.addop1_tmp, .addop2_tmp} = fv_ST_operands (inputs);
+      addop1 = addop1_tmp;
+      addop2 = addop2_tmp;
+   end
+`endif
+
+   let sum_tmp = addop1 + addop2;
+   IntXL sum = unpack(sum_tmp[valueof(XLEN):1]);
+
+   //
+   // do the operations given the sum
+   //
+   if (inputs.decoded_instr.opcode == op_BRANCH) begin
+      alu_outputs = fv_BRANCH (inputs, sum, fallthru_pc);
+   end
 
    else if (inputs.decoded_instr.opcode == op_JAL)
-      alu_outputs = fv_JAL (inputs);
+      alu_outputs = fv_JAL (inputs, sum, fallthru_pc);
 
    else if (inputs.decoded_instr.opcode == op_JALR)
-      alu_outputs = fv_JALR (inputs);
+      alu_outputs = fv_JALR (inputs, sum, fallthru_pc);
 
 `ifdef ISA_M
    // OP 'M' ops MUL/ MULH/ MULHSU/ MULHU/ DIV/ DIVU/ REM/ REMU
@@ -1129,28 +1437,28 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    // Remaining OP_IMM and OP (excluding shifts and 'M' ops MUL/DIV/REM)
    else if (   (inputs.decoded_instr.opcode == op_OP_IMM)
 	    || (inputs.decoded_instr.opcode == op_OP))
-      alu_outputs = fv_OP_and_OP_IMM (inputs);
+      alu_outputs = fv_OP_and_OP_IMM (inputs, sum);
 
 `ifdef RV64
    else if (inputs.decoded_instr.opcode == op_OP_IMM_32)
-      alu_outputs = fv_OP_IMM_32 (inputs);
+      alu_outputs = fv_OP_IMM_32 (inputs, sum);
 
    // Remaining op_OP_32 (excluding 'M' ops)
    else if (inputs.decoded_instr.opcode == op_OP_32)
-      alu_outputs = fv_OP_32 (inputs);
+      alu_outputs = fv_OP_32 (inputs, sum);
 `endif
 
    else if (inputs.decoded_instr.opcode == op_LUI)
       alu_outputs = fv_LUI (inputs);
 
    else if (inputs.decoded_instr.opcode == op_AUIPC)
-      alu_outputs = fv_AUIPC (inputs);
+      alu_outputs = fv_AUIPC (inputs, sum);
 
    else if (inputs.decoded_instr.opcode == op_LOAD)
-      alu_outputs = fv_LD (inputs);
+      alu_outputs = fv_LD (inputs, sum);
 
    else if (inputs.decoded_instr.opcode == op_STORE)
-      alu_outputs = fv_ST (inputs);
+      alu_outputs = fv_ST (inputs, sum);
 
    else if (inputs.decoded_instr.opcode == op_MISC_MEM)
       alu_outputs = fv_MISC_MEM (inputs);
@@ -1165,10 +1473,10 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
 `ifdef ISA_F
    else if (   (inputs.decoded_instr.opcode == op_LOAD_FP))
-      alu_outputs = fv_LD (inputs);
+      alu_outputs = fv_LD (inputs, sum);
 
    else if (   (inputs.decoded_instr.opcode == op_STORE_FP))
-      alu_outputs = fv_ST (inputs);
+      alu_outputs = fv_ST (inputs, sum);
 
    else if (   (inputs.decoded_instr.opcode == op_FP)
             || (inputs.decoded_instr.opcode == op_FMADD)

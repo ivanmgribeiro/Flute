@@ -10,7 +10,9 @@ package CPU_Decode_C;
 // ================================================================
 // Exports
 
-export fv_decode_C;
+export fv_decode_C,
+DecodeC_IFC (..),
+mkDecodeC;
 
 // ================================================================
 // BSV library imports
@@ -28,6 +30,36 @@ export fv_decode_C;
 import ISA_Decls   :: *;
 
 // ================================================================
+
+
+interface DecodeC_IFC;
+   (* always_ready *)
+   method Instr get_outputs();
+
+   (* always_ready *)
+   method Action put_inputs(MISA misa_in, Bit#(2) xl_in, Instr_C instr_C_in);
+endinterface
+
+(* synthesize *)
+module mkDecodeC (DecodeC_IFC);
+   // MISA is a constant; this is inefficient
+   Wire#(MISA) misa <- mkDWire (?);
+   Wire#(Bit#(2)) xl <- mkDWire (?);
+   Wire#(Instr_C) instr_C <- mkDWire (?);
+   Wire#(Instr) outputs <- mkDWire (?);
+
+   rule assign_outputs;
+      outputs <= fv_decode_C(misa, xl, instr_C);
+   endrule
+
+   method Instr get_outputs = outputs;
+
+   method Action put_inputs(MISA misa_in, Bit#(2) xl_in, Instr_C instr_C_in);
+      misa <= misa_in;
+      xl <= xl_in;
+      instr_C <= instr_C_in;
+   endmethod
+endmodule
 
 function Instr fv_decode_C (MISA misa, Bit #(2) xl, Instr_C instr_C);
    // ----------------
