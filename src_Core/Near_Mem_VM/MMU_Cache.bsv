@@ -77,6 +77,10 @@ import SoC_Map      :: *;
 import AXI4_Types   :: *;
 import Fabric_Defs  :: *;
 
+`ifdef RVFI_DII
+import RVFI_DII :: *;
+`endif
+
 // ================================================================
 
 export  MMU_Cache_IFC (..),  mkMMU_Cache;
@@ -890,6 +894,13 @@ module mkMMU_Cache  #(parameter Bool dmem_not_imem)  (MMU_Cache_IFC);
 	 rg_state <= MODULE_EXCEPTION_RSP;
 	 rg_exc_code <= vm_xlate_result.exc_code;
       end
+`ifdef RVFI_DII
+      else if (vm_xlate_result.pa < fromInteger (valueOf (RVFI_DII_Mem_Start)) || vm_xlate_result.pa >= fromInteger (valueOf (RVFI_DII_Mem_End))) begin
+	 // We detect accesses outside of the assigned RVFI_DII range and trap on them
+	 rg_state <= MODULE_EXCEPTION_RSP;
+	 rg_exc_code <= (((rg_op == CACHE_LD) || is_AMO_LR) ? exc_code_LOAD_ACCESS_FAULT : exc_code_STORE_AMO_ACCESS_FAULT);
+      end
+`endif
 
       // ---- vm_xlate_result.outcome == VM_XLATE_OK
       else begin

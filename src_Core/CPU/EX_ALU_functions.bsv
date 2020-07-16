@@ -271,6 +271,10 @@ function ALU_Outputs fv_BRANCH (ALU_Inputs inputs);
    alu_outputs.op_stage2 = OP_Stage2_ALU;
    alu_outputs.rd        = 0;
    alu_outputs.addr      = next_pc;
+   // Gives a defined value when in verification mode.
+   `ifdef RVFI
+   alu_outputs.val1 = 0;
+   `endif
    alu_outputs.val2      = extend (branch_target);    // For tandem verifier only
 
    alu_outputs.cf_info   = cf_info;

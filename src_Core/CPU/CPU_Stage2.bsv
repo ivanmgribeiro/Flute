@@ -45,6 +45,11 @@ import Cur_Cycle  :: *;
 
 import ISA_Decls     :: *;
 
+`ifdef RVFI
+import Verifier :: *;
+import RVFI_DII :: *;
+`endif
+
 import TV_Info       :: *;
 
 import CPU_Globals      :: *;
@@ -125,6 +130,10 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 
    // ----------------
 
+`ifdef RVFI
+   let info_RVFI_s1 = rg_stage2.info_RVFI_s1;
+`endif
+
    let bypass_base = Bypass {bypass_state: BYPASS_RD_NONE,
 			     rd:           rg_stage2.rd,
 			     rd_val:       rg_stage2.val1
@@ -137,9 +146,23 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 			       };
 `endif
 
+`ifdef RVFI
+    let info_RVFI_s2_base = Data_RVFI_Stage2 {
+                                    stage1:     info_RVFI_s1,
+                                    mem_rmask:  0,
+                                    mem_wmask:  0
+                                };
+`endif
+
    let data_to_stage3_base = Data_Stage2_to_Stage3 {priv:       rg_stage2.priv,
 						    pc:         rg_stage2.pc,
 						    instr:      rg_stage2.instr,
+`ifdef RVFI_DII
+                                                    instr_seq:  rg_stage2.instr_seq,
+`endif
+`ifdef RVFI
+                                                    info_RVFI_s2: info_RVFI_s2_base,
+`endif
 
 						    rd_valid:   False,
 						    rd:         rg_stage2.rd,
@@ -319,6 +342,37 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
                trace_data.word1 = data_to_stage3.rd_val;
 
             data_to_stage3.trace_data = trace_data;
+`elsif RVFI
+	    let info_RVFI_s2 = info_RVFI_s2_base;
+        // If we're doing a load or AMO other than SC, we need to set the read mask.
+        if((rg_stage2.op_stage2 == OP_Stage2_LD)
+`ifdef ISA_A
+            ||((rg_stage2.op_stage2 == OP_Stage2_AMO) && (rg_f5 != f5_AMO_SC))
+`endif
+        ) begin
+            info_RVFI_s2.mem_rmask = getMemMask(instr_funct3(rg_stage2.instr),rg_stage2.addr);
+        end
+`ifdef ISA_A
+        // If we're doing an AMO that's not an LR, we need to set the write mask as well.
+        if (rg_stage2.op_stage2 == OP_Stage2_AMO && rg_f5 != f5_AMO_LR) begin
+            // For most AMOs we can just go ahead and do it
+            if (rg_f5 != f5_AMO_SC) begin
+                info_RVFI_s2.mem_wmask = getMemMask(instr_funct3(rg_stage2.instr),rg_stage2.addr);
+                match {.new_ld_val,
+                       .new_st_val} = fn_amo_op (instr_funct3(rg_stage2.instr),
+                                                 rg_f5,
+                                                 rg_stage2.addr,
+                                                 unpack(pack(toMem(result))),
+                                                 tuple2(False, zeroExtend(rg_stage2.info_RVFI_s1.mem_wdata))
+                                                );
+                info_RVFI_s2.stage1.mem_wdata = truncate(pack(tpl_2(new_st_val)));
+            // For SC however we do need to check that it was successful, otherwise we've not written.
+            end else begin
+                info_RVFI_s2.mem_wmask = ((int_ret_val != 0) ? getMemMask(instr_funct3(rg_stage2.instr),rg_stage2.addr) : 0);
+            end
+        end
+        data_to_stage3.info_RVFI_s2 = info_RVFI_s2;
+`endif
 `endif
 
             output_stage2 = Output_Stage2 {ostatus         : ostatus,
@@ -342,6 +396,15 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 	 let data_to_stage3 = data_to_stage3_base;
 	 data_to_stage3.rd_valid = (ostatus == OSTATUS_PIPE);
 	 data_to_stage3.rd       = 0;
+
+`ifdef RVFI
+	 data_to_stage3.rd_val   = 0;
+	 let info_RVFI_s2 = info_RVFI_s2_base;
+	 info_RVFI_s2.mem_wmask = getMemMask(instr_funct3(rg_stage2.instr),rg_stage2.addr);
+	 data_to_stage3.info_RVFI_s2 = info_RVFI_s2;
+`else
+	 data_to_stage3.rd_val   = ?;
+`endif
 
 	 output_stage2 = Output_Stage2 {ostatus         : ostatus,
 					trap_info       : trap_info_dmem,
@@ -372,6 +435,10 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 	 let trace_data            = rg_stage2.trace_data;
 	 trace_data.word1          = result;
 	 data_to_stage3.trace_data = trace_data;
+`elsif RVFI
+	 // No memory op, so very simple.
+	 let info_RVFI_s2 = info_RVFI_s2_base;
+	 data_to_stage3.info_RVFI_s2 = info_RVFI_s2;
 `endif
 
 	 output_stage2 = Output_Stage2 {ostatus         : ostatus,
@@ -404,6 +471,10 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 	 let trace_data            = rg_stage2.trace_data;
 	 trace_data.word1          = result;
 	 data_to_stage3.trace_data = trace_data;
+`elsif RVFI
+	 // No memory op, so very simple.
+	 let info_RVFI_s2 = info_RVFI_s2_base;
+	 data_to_stage3.info_RVFI_s2 = info_RVFI_s2;
 `endif
 
 	 output_stage2 = Output_Stage2 {ostatus         : ostatus,
@@ -473,6 +544,10 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
          end
 
 	 data_to_stage3.trace_data = trace_data;
+`elsif RVFI
+	 // No memory op, so very simple.
+	 let info_RVFI_s2 = info_RVFI_s2_base;
+	 data_to_stage3.info_RVFI_s2 = info_RVFI_s2;
 `endif
 
 	 output_stage2 = Output_Stage2 {ostatus         : ostatus,

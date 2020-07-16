@@ -32,6 +32,10 @@ import CPU_Globals       :: *;
 import Near_Mem_IFC      :: *;
 import Branch_Predictor  :: *;
 
+`ifdef RVFI_DII
+import RVFI_DII          :: *;
+`endif
+
 // ================================================================
 // Interface
 
@@ -51,6 +55,9 @@ interface CPU_StageF_IFC;
    method Action enq (Epoch            epoch,
 		      WordXL           pc,
 		      Priv_Mode        priv,
+`ifdef RVFI_DII
+                      Dii_Id           next_seq,
+`endif
 		      Bit #(1)         sstatus_SUM,
 		      Bit #(1)         mstatus_MXR,
 		      WordXL           satp);
@@ -97,7 +104,13 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
    // Combinational output function
 
    function Output_StageF fv_out;
-      let pred_pc = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem.instr);
+`ifdef RVFI_DII
+      let imem_instr = tpl_1(imem.instr);
+`else
+      let imem_instr = imem.instr;
+`endif
+
+      let pred_pc = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem_instr);
       let d = Data_StageF_to_StageD {pc:              imem.pc,
 				     epoch:           rg_epoch,
 				     priv:            rg_priv,
@@ -105,7 +118,10 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
 				     exc:             imem.exc,
 				     exc_code:        imem.exc_code,
 				     tval:            imem.tval,
-				     instr:           imem.instr,
+				     instr:           imem_instr,
+`ifdef RVFI_DII
+                                     instr_seq:       tpl_2(imem.instr),
+`endif
 				     pred_pc:         pred_pc};
 
       let ostatus = (  (! rg_full) ? OSTATUS_EMPTY
@@ -136,6 +152,9 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
    method Action enq (Epoch            epoch,
 		      WordXL           pc,
 		      Priv_Mode        priv,
+`ifdef RVFI_DII
+                      Dii_Id           next_seq,
+`endif
 		      Bit #(1)         sstatus_SUM,
 		      Bit #(1)         mstatus_MXR,
 		      WordXL           satp);
@@ -146,7 +165,11 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
 	 $display ("");
       end
 
-      imem.req (f3_LW, pc, priv, sstatus_SUM, mstatus_MXR, satp);
+      imem.req (f3_LW, pc, priv, sstatus_SUM, mstatus_MXR, satp
+`ifdef RVFI_DII
+                                                               , next_seq
+`endif
+                                                               );
       branch_predictor.predict_req (pc);    // TODO: ASID.VA vs PA?
 
       rg_epoch <= epoch;

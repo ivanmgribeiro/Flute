@@ -24,6 +24,10 @@ package ISA_Decls;
 import DefaultValue :: *;
 import Vector       :: *;
 import BuildVector  :: *;
+`ifdef RVFI_DII
+import GetPut :: *;
+import RVFI_DII :: *;
+`endif
 
 // ================================================================
 // BSV project imports
@@ -33,6 +37,7 @@ import BuildVector  :: *;
 // ================================================================
 
 typedef 3 NO_OF_PRIVMODES;
+typedef 32 ILEN;
 
 // ================================================================
 // XLEN and related constants
@@ -1150,6 +1155,21 @@ typedef struct {
 // Machine-Level ISA defs
 
 `include "ISA_Decls_Priv_M.bsv"
+
+// ================================================================
+// Common RVFI_DII interface passed through several layers of Flute
+
+`ifdef RVFI_DII
+    typedef XLEN MEMWIDTH;
+    typedef Bit#(32) Dii_Inst;
+    typedef RVFI_DII_Types::Dii_Id Dii_Id;
+    typedef RVFI_DII_Execution#(XLEN, MEMWIDTH) Rvfi_Trace;
+    interface Flute_RVFI_DII_Server;
+        interface Get#(Dii_Id) seqReq;
+        interface Put#(Tuple2#(Dii_Inst, Dii_Id)) inst;
+        interface Get #(Rvfi_Trace) trace_report;
+    endinterface
+`endif
 
 // ================================================================
 

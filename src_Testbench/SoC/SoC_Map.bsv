@@ -45,12 +45,18 @@ export  irq_num_accel0;
 // ================================================================
 // Bluespec library imports
 
-// None
+import Routable :: *; // For Range
 
 // ================================================================
 // Project imports
 
 import Fabric_Defs :: *;    // Only for type Fabric_Addr
+
+`ifdef RVFI_DII
+import RVFI_DII     :: *;
+`endif
+
+import ISA_Decls :: *;
 
 // ================================================================
 // Interface and module for the address map
@@ -197,6 +203,19 @@ module mkSoC_Map (SoC_Map_IFC);
       return ((tcm_addr_base <= addr) && (addr < tcm_addr_lim));
    endfunction
 
+`ifdef RVFI_DII
+  let rvfi_cached = Range {
+      base: 'h_8000_0000,
+      size: fromInteger(valueOf(RVFI_DII_Mem_Size))
+   };
+   function Bool fn_is_mem_addr (Fabric_Addr addr);
+       return (inRange(rvfi_cached, addr));
+   endfunction
+   function Bool fn_is_IO_addr (Fabric_Addr addr);
+       return False;
+   endfunction
+`else
+
    // ----------------------------------------------------------------
    // Memory address predicate
    // Identifies memory addresses in the Fabric.
@@ -223,13 +242,18 @@ module mkSoC_Map (SoC_Map_IFC);
 `endif
 	      );
    endfunction
+`endif
 
    // ----------------------------------------------------------------
    // PC, MTVEC and NMIVEC reset values
 
+`ifdef RVFI_DII
+   Bit #(XLEN) pc_reset_value     = 'h8000_0000;
+   Bit #(XLEN) mtvec_reset_value  = 'h0000;
+`else
    Bit #(64) pc_reset_value     = boot_rom_addr_base;
    Bit #(64) mtvec_reset_value  = 'h1000;    // TODO
-
+`endif
    // Non-maskable interrupt vector
    Bit #(64) nmivec_reset_value = ?;         // TODO
 

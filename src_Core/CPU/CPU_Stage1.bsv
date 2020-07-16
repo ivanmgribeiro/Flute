@@ -173,8 +173,46 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 
    let alu_outputs = fv_ALU (alu_inputs);
 
+
+
+
+   let fall_through_pc = rg_stage_input.pc + (rg_stage_input.is_i32_not_i16 ? 4 : 2);
+   let next_pc = ((alu_outputs.control == CONTROL_BRANCH)
+			? alu_outputs.addr
+			: fall_through_pc);
+
+`ifdef RVFI
+   let info_RVFI = Data_RVFI_Stage1 {
+                       instr:          rg_stage_input.instr,
+                       rs1_addr:       rs1,
+                       rs2_addr:       rs2,
+                       rs1_data:       rs1_val_bypassed,
+                       rs2_data:       rs2_val_bypassed,
+                       pc_rdata:       rg_stage_input.pc,
+                       pc_wdata:       next_pc,
+`ifdef ISA_F
+                       mem_wdata:      alu_outputs.rs_frm_fpr ? alu_outputs.fval2 : alu_outputs.val2,
+`else
+                       mem_wdata:      alu_outputs.val2,
+`endif
+                       rd_addr:        alu_outputs.rd,
+                       rd_alu:         (alu_outputs.op_stage2 == OP_Stage2_ALU),
+                       rd_wdata_alu:   alu_outputs.val1,
+                       mem_addr:       ((alu_outputs.op_stage2 == OP_Stage2_LD) || (alu_outputs.op_stage2 == OP_Stage2_ST)
+`ifdef ISA_A
+                                     || (alu_outputs.op_stage2 == OP_Stage2_AMO)
+`endif
+                                       ) ? alu_outputs.addr : 0};
+`endif
+
+
+
+
    let data_to_stage2 = Data_Stage1_to_Stage2 {pc            : rg_stage_input.pc,
 					       instr         : rg_stage_input.instr,
+`ifdef RVFI_DII
+                                               instr_seq     : rg_stage_input.instr_seq,
+`endif
 					       op_stage2     : alu_outputs.op_stage2,
 					       rd            : alu_outputs.rd,
 					       addr          : alu_outputs.addr,
@@ -191,6 +229,9 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 `endif
 `ifdef INCLUDE_TANDEM_VERIF
 					       trace_data    : alu_outputs.trace_data,
+`endif
+`ifdef RVFI
+                                               info_RVFI_s1  : info_RVFI,
 `endif
 					       priv          : cur_priv };
 
@@ -213,6 +254,9 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 	 // For debugging only
 	 let data_to_stage2 = Data_Stage1_to_Stage2 {pc:        rg_stage_input.pc,
 						     instr:     rg_stage_input.instr,
+`ifdef RVFI_DII
+                                                     instr_seq: rg_stage_input.instr_seq,
+`endif
 						     op_stage2: OP_Stage2_ALU,
 						     rd:        0,
 						     addr:      ?,
@@ -229,6 +273,9 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 `endif
 `ifdef INCLUDE_TANDEM_VERIF
 						     trace_data: alu_outputs.trace_data,
+`endif
+`ifdef RVFI
+                                                     info_RVFI_s1 : ?,
 `endif
 						     priv:      cur_priv
 						     };
@@ -287,11 +334,9 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 				    exc_code: alu_outputs.exc_code,
 				    tval:     tval};
 
-	 let fall_through_pc = rg_stage_input.pc + (rg_stage_input.is_i32_not_i16 ? 4 : 2);
-	 let next_pc = ((alu_outputs.control == CONTROL_BRANCH)
-			? alu_outputs.addr
-			: fall_through_pc);
 	 let redirect = (next_pc != rg_stage_input.pred_pc);
+
+
 
 	 output_stage1.ostatus        = ostatus;
 	 output_stage1.control        = alu_outputs.control;

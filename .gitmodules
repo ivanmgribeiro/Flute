@@ -1,0 +1,6 @@
+[submodule "src_Verifier/BSV-RVFI-DII"]
+	path = src_Verifier/BSV-RVFI-DII
+	url = https://github.com/CTSRD-CHERI/BSV-RVFI-DII
+[submodule "libs/BlueStuff"]
+	path = libs/BlueStuff
+	url = https://github.com/CTSRD-CHERI/BlueStuff

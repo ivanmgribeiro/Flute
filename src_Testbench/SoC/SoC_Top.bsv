@@ -67,6 +67,11 @@ import AXI4_Accel     :: *;
 import TV_Info :: *;
 `endif
 
+`ifdef RVFI_DII
+import RVFI_DII  :: *;
+import ISA_Decls :: *;
+`endif
+
 `ifdef INCLUDE_GDB_CONTROL
 import External_Control :: *;    // Control requests/responses from HSFE
 import Debug_Module     :: *;
@@ -87,6 +92,8 @@ interface SoC_Top_IFC;
 `ifdef INCLUDE_TANDEM_VERIF
    // To tandem verifier
    interface Get #(Info_CPU_to_Verifier) tv_verifier_info_get;
+`elsif RVFI_DII
+   interface Flute_RVFI_DII_Server rvfi_dii_server;
 `endif
 
    // External real memory
@@ -410,6 +417,8 @@ module mkSoC_Top (SoC_Top_IFC);
 `ifdef INCLUDE_TANDEM_VERIF
    // To tandem verifier
    interface tv_verifier_info_get = core.tv_verifier_info_get;
+`elsif RVFI_DII
+   interface rvfi_dii_server = core.rvfi_dii_server;
 `endif
 
    // External real memory

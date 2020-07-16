@@ -46,6 +46,19 @@ import ISA_Decls :: *;
 
 import TV_Info   :: *;
 
+`ifdef RVFI
+import Verifier  :: *;
+import RVFI_DII  :: *;
+`endif
+`ifdef RVFI_DII
+import Flute_RVFI_DII_Bridge :: *;
+`else
+`ifdef ISA_C
+// 'C' extension (16b compressed instructions)
+import CPU_Fetch_C  :: *;
+`endif
+`endif
+
 import GPR_RegFile :: *;
 `ifdef ISA_F
 import FPR_RegFile :: *;
@@ -154,12 +167,22 @@ module mkCPU (CPU_IFC);
    // Near mem (caches or TCM, for example)
    Near_Mem_IFC  near_mem <- mkNear_Mem;
 
-   // Take imem as is from near_mem, or use wrapper for 'C' extension
-`ifdef ISA_C
+
+   // ----------------
+   // If using Direct Instruction Injection then make a
+   // bridge that can insert instructions as if it were
+   // an instruction cache.
+`ifdef RVFI_DII
+   Flute_RVFI_DII_Bridge_IFC rvfi_bridge <- mkFluteRVFIDIIBridge;
+   IMem_IFC imem = rvfi_bridge.instr_CPU;
+   Reg#(Dii_Id) rg_next_seq <- mkRegU; // Next sequence number to request when trapping
+`elsif ISA_C
+      // Take imem as is from near_mem or RVFI_DII, or use wrapper for 'C' extension
    IMem_IFC imem <- mkCPU_Fetch_C (near_mem.imem);
 `else
    IMem_IFC imem = near_mem.imem;
 `endif
+
 
    // ----------------
    // For debugging
@@ -185,6 +208,8 @@ module mkCPU (CPU_IFC);
    Reg #(Instr)      rg_trap_instr      <- mkRegU;
 `ifdef INCLUDE_TANDEM_VERIF
    Reg #(Trace_Data) rg_trap_trace_data <- mkRegU;
+`elsif RVFI
+   Reg #(Either#(Data_Stage1_to_Stage2, Data_Stage2_to_Stage3)) rg_trap_trace_data <- mkRegU;
 `endif
 
    // rg_next_pc is used for redirections (branches, non-pipe
@@ -280,11 +305,21 @@ module mkCPU (CPU_IFC);
 
    // State for deciding if a MIP update needs to be sent into the trace file
    Reg #(WordXL) rg_prev_mip <- mkReg (0);
+`elsif RVFI
+   FIFOF #(RVFI_DII_Execution #(XLEN,MEMWIDTH))  f_to_verifier <- mkFIFOF;
+   Reg   #(Bool)                  rg_handler    <- mkReg (False);
+   Reg   #(Bool)                  rg_donehalt       <- mkReg (False);
+
+   Reg #(WordXL) rg_prev_mip <- mkRegU;
 `endif
 
    function Bool mip_cmd_needed ();
 `ifdef INCLUDE_TANDEM_VERIF
       // If the MTIP, MSIP, or xEIP bits of MIP have changed, then send a MIP update
+      WordXL new_mip = csr_regfile.csr_mip_read;
+      Bool mip_has_changed = (new_mip != rg_prev_mip);
+      return mip_has_changed;
+`elsif RVFI
       WordXL new_mip = csr_regfile.csr_mip_read;
       Bool mip_has_changed = (new_mip != rg_prev_mip);
       return mip_has_changed;
@@ -331,7 +366,11 @@ module mkCPU (CPU_IFC);
    // Actions to restart from Debug Mode (e.g., GDB 'continue' after a breakpoint)
    // We re-initialize CPI_instrs and CPI_cycles.
 
-   function Action fa_stageF_redirect (Addr new_pc);
+   function Action fa_stageF_redirect (Addr new_pc
+`ifdef RVFI_DII
+				     , Dii_Id next_seq
+`endif
+                                                  );
       action
 	 // Update epoch
 	 let new_epoch = rg_epoch + 1;
@@ -340,6 +379,9 @@ module mkCPU (CPU_IFC);
 	 stageF.enq (new_epoch,
 		     new_pc,
 		     rg_cur_priv,
+`ifdef RVFI_DII
+		     next_seq,
+`endif
 		     sstatus_SUM,
 		     mstatus_MXR,
 		     csr_regfile.read_satp);
@@ -359,7 +401,11 @@ module mkCPU (CPU_IFC);
 	 stage1.set_full (False);
 	 stageD.set_full (False);
 
-	 fa_stageF_redirect (resume_pc);
+	 fa_stageF_redirect (resume_pc
+`ifdef RVFI_DII
+                                      , 0
+`endif
+                                      );
 
 	 rg_start_CPI_cycles <= mcycle;
 	 rg_start_CPI_instrs <= minstret;
@@ -424,6 +470,7 @@ module mkCPU (CPU_IFC);
       let run_on_reset <- pop (f_reset_reqs);
       rg_run_on_reset <= run_on_reset;
 
+`ifndef RVFI_DII
       $display ("================================================================");
       $write   ("CPU: Bluespec  RISC-V  Flute  v3.0");
       if (rv_version == RV32)
@@ -432,6 +479,7 @@ module mkCPU (CPU_IFC);
 	 $display (" (RV64)");
       $display ("Copyright (c) 2016-2020 Bluespec, Inc. All Rights Reserved.");
       $display ("================================================================");
+`endif
 
       gpr_regfile.server_reset.request.put (?);
 `ifdef ISA_F
@@ -465,12 +513,14 @@ module mkCPU (CPU_IFC);
 
    // ----------------
 
+`ifndef RVFI_DII
 `ifdef ISA_C
    // TODO: analyze this carefully; added to resolve a blockage.
    // imem_rl_fetch_next_32b is in CPU_Fetch_C.bsv, and calls imem32.req (near_mem.imem_req).
    // fa_stageF_redirect calls stageF.enq which also calls imem.req which calls imem32.req.
    // But cond_i32_odd_fetch_next should make these rules mutually exclusive; why doesn't bsc realize this?
    (* descending_urgency = "imem_rl_fetch_next_32b, rl_reset_complete" *)
+`endif
 `endif
 
    rule rl_reset_complete (rg_state == CPU_RESET2);
@@ -594,6 +644,15 @@ module mkCPU (CPU_IFC);
       if (cur_verbosity > 1)
 	 $display ("%0d: %m.rl_stage1_mip_cmd: MIP new 0x%0h, old 0x%0h", mcycle, new_mip, rg_prev_mip);
    endrule
+`elsif RVFI
+   rule rl_stage1_mip_cmd (   (rg_state == CPU_RUNNING)
+			   && stage1_send_mip_cmd);
+      WordXL new_mip = csr_regfile.csr_mip_read;
+      rg_prev_mip <= new_mip;
+
+      if (cur_verbosity > 1)
+	 $display ("%0d: CPU.rl_stage1_mip_cmd: new MIP = ", mcycle, fshow(new_mip));
+   endrule
 `endif
 
    // ================================================================
@@ -606,12 +665,14 @@ module mkCPU (CPU_IFC);
    // a cycle before restarting the pipe by re-fetching the next
    // instr, since the fetch may need the just-written CSR value.
 
+`ifndef RVFI_DII
 `ifdef ISA_C
    // TODO: analyze this carefully; added to resolve a blockage
    // imem_rl_fetch_next_32b is in CPU_Fetch_C.bsv, and calls imem32.req (near_mem.imem_req).
    // fa_stageF_redirect calls stageF.enq which also calls imem.req which calls imem32.req.
    // But cond_i32_odd_fetch_next should make these rules mutually exclusive; why doesn't bsc realize this?
    (* descending_urgency = "imem_rl_fetch_next_32b, rl_pipe" *)
+`endif
 `endif
 
    rule rl_pipe (   (rg_state == CPU_RUNNING)
@@ -648,6 +709,18 @@ module mkCPU (CPU_IFC);
 	 stage3.enq (stage2.out.data_to_stage3);  stage3_full = True;
 	 stage2.deq;                              stage2_full = False;
 
+`ifdef RVFI
+	 let outpacket = getRVFIInfoCondensed(stage2.out.data_to_stage3,
+					      ?,
+					      minstret,
+					      False,
+					      0,
+					      rg_handler,rg_donehalt);
+	 rg_donehalt <= outpacket.rvfi_halt;
+	 f_to_verifier.enq(outpacket);
+	 rg_handler <= False;
+`endif
+
 	 // Increment csr_INSTRET.
 	 // Note: this instr cannot be a CSRRx updating INSTRET, since
 	 // CSRRx is done off-pipe
@@ -676,11 +749,14 @@ module mkCPU (CPU_IFC);
 
 	       if (stage1.out.redirect) begin
 		  rg_next_pc <= stage1.out.next_pc;
+`ifdef RVFI_DII
+		     rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
 		  redirect    = True;
 	       end
 	    end
 	 end
-	  
+
       // ----------------
       // Move instruction from StageD to Stage1
       if (   (! stage1_full)
@@ -715,6 +791,9 @@ module mkCPU (CPU_IFC);
 	       stageF.enq (stageF.out.data_to_stageD.epoch,
 			   stageF.out.data_to_stageD.pred_pc,
 			   rg_cur_priv,
+`ifdef RVFI_DII
+			   stageF.out.data_to_stageD.instr_seq + 1,
+`endif
 			   sstatus_SUM,
 			   mstatus_MXR,
 			   csr_regfile.read_satp);
@@ -748,8 +827,13 @@ module mkCPU (CPU_IFC);
       rg_trap_info       <= stage2.out.trap_info;
       rg_trap_interrupt  <= False;
       rg_trap_instr      <= stage2.out.data_to_stage3.instr;
+`ifdef RVFI_DII
+      rg_next_seq        <= stage2.out.data_to_stage3.instr_seq + 1;
+`endif
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage2.out.data_to_stage3.trace_data;
+`elsif RVFI
+      rg_trap_trace_data <= Right(stage2.out.data_to_stage3);
 `endif
 
       rg_state           <= CPU_TRAP;
@@ -779,8 +863,13 @@ module mkCPU (CPU_IFC);
       rg_trap_info       <= stage1.out.trap_info;
       rg_trap_interrupt  <= False;
       rg_trap_instr      <= stage1.out.data_to_stage2.instr;
+`ifdef RVFI_DII
+      rg_next_seq        <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;
+`elsif RVFI
+      rg_trap_trace_data <= Left(stage1.out.data_to_stage2);
 `endif
 
       rg_state           <= CPU_TRAP;
@@ -846,16 +935,28 @@ module mkCPU (CPU_IFC);
 	 trace_data.word4 = tval;
       end
       f_trace_data.enq (trace_data);
+`elsif RVFI
+      let outpacketPart =
+      case (rg_trap_trace_data) matches
+        tagged Left  .l: getRVFIInfoS1(l, Valid(next_pc), Invalid);
+        tagged Right .r: getRVFIInfoCondensed(r, next_pc);
+      endcase;
+      let outpacket = outpacketPart(minstret,True,exc_code,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= True;
 `endif
 
       // Simulation heuristic: finish if trap back to this instr
 `ifndef INCLUDE_GDB_CONTROL
+`ifndef RVFI_DII
       if (epc == next_pc) begin
 	 $display ("%0d: %m.rl_stage1_trap: Tight infinite trap loop: pc 0x%0x instr 0x%08x", mcycle,
 		   next_pc, instr);
 	 fa_report_CPI;
 	 $finish (0);
       end
+`endif
 `endif
 
       fa_emit_instr_trace (minstret, epc, instr, rg_cur_priv);
@@ -882,6 +983,10 @@ module mkCPU (CPU_IFC);
       rg_csr_pc  <= stage1.out.data_to_stage2.pc;
       rg_next_pc <= stage1.out.next_pc;
 
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
+
 `ifdef ISA_F
       // With FP, the val is always Bit #(64)
       // TODO: is this ifdef necessary? Can't we always use 'truncate'?
@@ -898,6 +1003,8 @@ module mkCPU (CPU_IFC);
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // Also used in successful CSSRW
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;
+`elsif RVFI
+      rg_trap_trace_data <= Left(stage1.out.data_to_stage2);
 `endif
 
       rg_state <= CPU_CSRRW_2;
@@ -969,6 +1076,11 @@ module mkCPU (CPU_IFC);
 					 isValid (m_new_mstatus),
 					 fromMaybe (?, m_new_mstatus));
 	 f_trace_data.enq (trace_data);
+`elsif RVFI
+      let outpacket = getRVFIInfoS1(rg_trap_trace_data.Left,Invalid,rd==0 ? Invalid : Valid(new_rd_val),minstret,False,0,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= False;
 `endif
 
 	 // Debug
@@ -996,6 +1108,10 @@ module mkCPU (CPU_IFC);
       rg_csr_pc  <= stage1.out.data_to_stage2.pc;
       rg_next_pc <= stage1.out.next_pc;
 
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
+
 `ifdef ISA_F
       // With FP, the val is always Bit #(64)
       // TODO: is this ifdef necessary? Can't we always use 'truncate'?
@@ -1012,6 +1128,8 @@ module mkCPU (CPU_IFC);
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // TODO: this is also used for successful CSRRW
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;    // TODO: this is also used for successful CSRRW
+`elsif RVFI
+      rg_trap_trace_data <= Left(stage1.out.data_to_stage2);
 `endif
 
       rg_state <= CPU_CSRR_S_or_C_2;
@@ -1089,6 +1207,11 @@ module mkCPU (CPU_IFC);
 					 isValid (m_new_mstatus),
 					 fromMaybe (?, m_new_mstatus));
 	 f_trace_data.enq (trace_data);
+`elsif RVFI
+      let outpacket = getRVFIInfoS1(rg_trap_trace_data.Left,Invalid,rd==0 ? Invalid : Valid (new_rd_val),minstret,False,0,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= False;
 `endif
 
 	 // Debug
@@ -1111,7 +1234,11 @@ module mkCPU (CPU_IFC);
 
       stageD.set_full (False);
       stage1.set_full (False);    fa_step_check;
-      fa_stageF_redirect (rg_next_pc);
+      fa_stageF_redirect (rg_next_pc
+`ifdef RVFI_DII
+                                    , rg_next_seq
+`endif
+      );
    endrule
 
    // ================================================================
@@ -1141,6 +1268,10 @@ module mkCPU (CPU_IFC);
       rg_mstatus_MXR <= mstatus_MXR;
       rg_sstatus_SUM <= sstatus_SUM;
 
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
+
       rg_state <= CPU_START_TRAP_HANDLER;    // TODO: bad naming; this is not starting the trap handler
 
       stageD.set_full (False);
@@ -1154,6 +1285,11 @@ module mkCPU (CPU_IFC);
       let td  = stage1.out.data_to_stage2.trace_data;
       let td1 = mkTrace_RET (next_pc, td.instr_sz, td.instr, new_priv, new_mstatus);
       f_trace_data.enq (td1);
+`elsif RVFI
+      let outpacket = getRVFIInfoS1(stage1.out.data_to_stage2,Valid(next_pc),Invalid,minstret,False,0,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= False;
 `endif
 
       // Debug
@@ -1176,6 +1312,11 @@ module mkCPU (CPU_IFC);
 
       // Save stage1.out.next_pc since it will be destroyed by FENCE.I op
       rg_next_pc <= stage1.out.next_pc;
+
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
+
       near_mem.server_fence_i.request.put (?);
       rg_state <= CPU_FENCE_I;
 
@@ -1186,6 +1327,11 @@ module mkCPU (CPU_IFC);
       // Trace data
       let trace_data = stage1.out.data_to_stage2.trace_data;
       f_trace_data.enq (trace_data);
+`elsif RVFI
+      let outpacket = getRVFIInfoS1(stage1.out.data_to_stage2,Invalid,Invalid,minstret,False,0,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= False;
 `endif
 
       // Debug
@@ -1206,7 +1352,11 @@ module mkCPU (CPU_IFC);
       // Resume pipe
       stageD.set_full (False);
       stage1.set_full (False);    fa_step_check;
-      fa_stageF_redirect (rg_next_pc);
+      fa_stageF_redirect (rg_next_pc
+`ifdef RVFI_DII
+                                    , rg_next_seq
+`endif
+      );
 
       if (cur_verbosity > 1)
 	 $display ("    CPU.rl_finish_FENCE_I");
@@ -1225,6 +1375,11 @@ module mkCPU (CPU_IFC);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_stage1_FENCE", mcycle);
 
       rg_next_pc <= stage1.out.next_pc;
+
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
+
       near_mem.server_fence.request.put (?);
       rg_state <= CPU_FENCE;
 
@@ -1235,6 +1390,11 @@ module mkCPU (CPU_IFC);
       // Trace data
       let trace_data = stage1.out.data_to_stage2.trace_data;
       f_trace_data.enq (trace_data);
+`elsif RVFI
+      let outpacket = getRVFIInfoS1(stage1.out.data_to_stage2,Invalid,Invalid,minstret,False,0,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= False;
 `endif
 
       // Debug
@@ -1255,7 +1415,11 @@ module mkCPU (CPU_IFC);
       // Resume pipe
       stageD.set_full (False);
       stage1.set_full (False);    fa_step_check;
-      fa_stageF_redirect (rg_next_pc);
+      fa_stageF_redirect (rg_next_pc
+`ifdef RVFI_DII
+                                    , rg_next_seq
+`endif
+      );
 
       if (cur_verbosity > 1)
 	 $display ("    CPU.rl_finish_FENCE");
@@ -1283,6 +1447,11 @@ module mkCPU (CPU_IFC);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_stage1_SFENCE_VMA", mcycle);
 
       rg_next_pc <= stage1.out.next_pc;
+
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
+
       // Tell Near_Mem to do its SFENCE_VMA
       near_mem.sfence_vma_server.request.put (?);
       rg_state <= CPU_SFENCE_VMA;
@@ -1294,6 +1463,11 @@ module mkCPU (CPU_IFC);
       // Trace data
       let trace_data = stage1.out.data_to_stage2.trace_data;
       f_trace_data.enq (trace_data);
+`elsif RVFI
+      let outpacket = getRVFIInfoS1(stage1.out.data_to_stage2,Invalid,Invalid,minstret,False,0,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= False;
 `endif
 
       // Debug
@@ -1314,7 +1488,11 @@ module mkCPU (CPU_IFC);
       // Resume pipe
       stageD.set_full (False);
       stage1.set_full (False);    fa_step_check;
-      fa_stageF_redirect (rg_next_pc);
+      fa_stageF_redirect (rg_next_pc
+`ifdef RVFI_DII
+                                    , rg_next_seq
+`endif
+      );
 
       if (cur_verbosity > 1)
 	 $display ("    CPU.rl_finish_SFENCE_VMA");
@@ -1334,6 +1512,11 @@ module mkCPU (CPU_IFC);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_stage1_WFI", mcycle);
 
       rg_next_pc <= stage1.out.next_pc;
+
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
+`endif
+
       rg_state   <= CPU_WFI_PAUSED;
 
       stageD.set_full (False);
@@ -1363,9 +1546,20 @@ module mkCPU (CPU_IFC);
       if (cur_verbosity > 1)
 	 $display ("%0d: %m.rl_WFI_resume", mcycle);
 
+`ifdef RVFI
+      let outpacket = getRVFIInfoS1(stage1.out.data_to_stage2,Invalid,Invalid,minstret,False,0,rg_handler,rg_donehalt);
+      rg_donehalt <= outpacket.rvfi_halt;
+      f_to_verifier.enq(outpacket);
+      rg_handler <= False;
+`endif
+
       // Resume pipe (it will handle the interrupt, if one is pending)
       stageD.set_full (False);
-      fa_stageF_redirect (rg_next_pc);
+      fa_stageF_redirect (rg_next_pc
+`ifdef RVFI_DII
+                                    , rg_next_seq
+`endif
+      );
    endrule: rl_WFI_resume
 
    // ----------------
@@ -1385,7 +1579,11 @@ module mkCPU (CPU_IFC);
    rule rl_trap_fetch ((rg_state == CPU_START_TRAP_HANDLER)
 		       && (stageF.out.ostatus != OSTATUS_BUSY));
       stageD.set_full (False);
-      fa_stageF_redirect (rg_next_pc);
+      fa_stageF_redirect (rg_next_pc
+`ifdef RVFI_DII
+                                    , rg_next_seq
+`endif
+      );
    endrule: rl_trap_fetch
 
    // ================================================================
@@ -1472,6 +1670,10 @@ module mkCPU (CPU_IFC);
 
 `ifdef INCLUDE_TANDEM_VERIF
       // rg_trap_trace_data <= ?;    // Will be filled in in rl_trap
+`endif
+
+`ifdef RVFI_DII
+      rg_next_seq <= stage1.out.data_to_stage2.instr_seq;
 `endif
 
       rg_state           <= CPU_TRAP;
@@ -1687,6 +1889,10 @@ module mkCPU (CPU_IFC);
    endrule
 `endif
 
+`ifdef RVFI_DII
+   mkConnection(rvfi_bridge.rvfi, toGet(f_to_verifier));
+`endif
+
    // ================================================================
    // ================================================================
    // ================================================================
@@ -1743,6 +1949,9 @@ module mkCPU (CPU_IFC);
 
 `ifdef INCLUDE_TANDEM_VERIF
    interface Get  trace_data_out = toGet (f_trace_data);
+`endif
+`ifdef RVFI_DII
+   interface Flute_RVFI_DII_Server rvfi_dii_server = rvfi_bridge.rvfi_dii_server;
 `endif
 
    // ----------------
