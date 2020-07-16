@@ -76,17 +76,26 @@ module mkGPR_RegFile (GPR_RegFile_IFC);
 
 `ifdef INCLUDE_TANDEM_VERIF
    Reg #(RegName) rg_j <- mkRegU;    // reset loop index
+`elsif RVFI
+   Reg #(RegName) rg_j <- mkRegU;    // reset loop index
 `endif
 
    rule rl_reset_start (rg_state == RF_RESET_START);
       rg_state <= RF_RESETTING;
 `ifdef INCLUDE_TANDEM_VERIF
       rg_j <= 1;
+`elsif RVFI
+      rg_j <= 1;
 `endif
    endrule
 
    rule rl_reset_loop (rg_state == RF_RESETTING);
 `ifdef INCLUDE_TANDEM_VERIF
+      regfile.upd (rg_j, 0);
+      rg_j <= rg_j + 1;
+      if (rg_j == 31)
+	 rg_state <= RF_RUNNING;
+`elsif RVFI
       regfile.upd (rg_j, 0);
       rg_j <= rg_j + 1;
       if (rg_j == 31)
