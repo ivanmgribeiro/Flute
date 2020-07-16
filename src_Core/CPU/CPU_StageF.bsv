@@ -81,7 +81,7 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
    Reg #(Epoch)      rg_epoch <- mkReg (0);               // Toggles on redirections
    Reg #(Priv_Mode)  rg_priv  <- mkRegU;
 
-   Branch_Predictor_IFC branch_predictor <- mkBranch_Predictor;
+   //Branch_Predictor_IFC branch_predictor <- mkBranch_Predictor;
 
    // ----------------------------------------------------------------
    // BEHAVIOR
@@ -97,7 +97,7 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
    // Combinational output function
 
    function Output_StageF fv_out;
-      let pred_pc = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem.instr);
+      //let pred_pc = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem.instr);
       let d = Data_StageF_to_StageD {pc:              imem.pc,
 				     epoch:           rg_epoch,
 				     priv:            rg_priv,
@@ -106,7 +106,8 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
 				     exc_code:        imem.exc_code,
 				     tval:            imem.tval,
 				     instr:           imem.instr,
-				     pred_pc:         pred_pc};
+				     //pred_pc:         pred_pc};
+				     pred_pc:         imem.pc + (imem.is_i32_not_i16? 4 : 2)};
 
       let ostatus = (  (! rg_full) ? OSTATUS_EMPTY
 		     : (  (! imem.valid) ? OSTATUS_BUSY
@@ -147,7 +148,7 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
       end
 
       imem.req (f3_LW, pc, priv, sstatus_SUM, mstatus_MXR, satp);
-      branch_predictor.predict_req (pc);    // TODO: ASID.VA vs PA?
+      //branch_predictor.predict_req (pc);    // TODO: ASID.VA vs PA?
 
       rg_epoch <= epoch;
       rg_priv  <= priv;
@@ -157,7 +158,7 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
 			   Bool     is_i32_not_i16,
 			   Instr    instr,
 			   CF_Info  cf_info);
-      branch_predictor.bp_train (pc, is_i32_not_i16, instr, cf_info);
+      //branch_predictor.bp_train (pc, is_i32_not_i16, instr, cf_info);
    endmethod
 
    method Action set_full (Bool full);
