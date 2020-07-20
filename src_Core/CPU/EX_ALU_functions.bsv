@@ -114,7 +114,7 @@ typedef struct {
    } ALU_Outputs
 deriving (Bits, FShow);
 
-typedef Bit #(TAdd#(XLEN, 1)) AdderInt;
+typedef Bit #(TAdd#(1, XLEN)) AdderInt;
 
 CF_Info cf_info_base = CF_Info {cf_op       : CF_None,
 				from_PC     : ?,
@@ -317,6 +317,10 @@ function ALU_Outputs fv_BRANCH (ALU_Inputs inputs, IntXL sum, Addr fallthru_pc);
    alu_outputs.op_stage2 = OP_Stage2_ALU;
    alu_outputs.rd        = 0;
    alu_outputs.addr      = next_pc;
+   // Gives a defined value when in verification mode.
+   `ifdef RVFI
+   alu_outputs.val1 = 0;
+   `endif
    alu_outputs.val2      = extend (branch_target);    // For tandem verifier only
 
    alu_outputs.cf_info   = cf_info;
@@ -559,7 +563,7 @@ function Tuple2#(AdderInt, AdderInt) fv_OP_and_OP_IMM_operands (ALU_Inputs input
       addop2 = {pack(s_rs2_val_local), 1'b0};
    end else if ((funct3 == f3_ADDI) && (subtract)) begin
       //rd_val = pack (s_rs1_val - s_rs2_val_local);
-      addop1 = {pack(s_rs1_val), 1'b0};
+      addop1 = {pack(s_rs1_val), 1'b1};
       addop2 = {~pack(s_rs2_val_local), 1'b1};
    end
 
@@ -705,8 +709,8 @@ endfunction: fv_OP_IMM_32
 // OP_32 (excluding 'M' ops: MULW/ DIVW/ DIVUW/ REMW/ REMUW)
 
 function Tuple2#(AdderInt, AdderInt) fv_OP_32_operands (ALU_Inputs inputs);
-   let addop1 = (?);
-   let addop2 = (?);
+   AdderInt addop1 = (?);
+   AdderInt addop2 = (?);
 
    Bit #(32) rs1_val = inputs.rs1_val [31:0];
    Bit #(32) rs2_val = inputs.rs2_val [31:0];
@@ -721,12 +725,12 @@ function Tuple2#(AdderInt, AdderInt) fv_OP_32_operands (ALU_Inputs inputs);
 
    if (funct10 == f10_ADDW) begin
       //rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
-      addop1 = {pack(s_rs1_val), 1'b0};
-      addop2 = {pack(s_rs2_val), 1'b0};
+      addop1 = extend({pack(s_rs1_val), 1'b0});
+      addop2 = extend({pack(s_rs2_val), 1'b0});
    end else if (funct10 == f10_SUBW) begin
       //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
-      addop1 = {pack(s_rs1_val), 1'b0};
-      addop2 = {~pack(s_rs2_val), 1'b1};
+      addop1 = extend({pack(s_rs1_val), 1'b0});
+      addop2 = extend({~pack(s_rs2_val), 1'b1});
    end
 
    return tuple2(addop1, addop2);

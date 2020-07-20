@@ -185,10 +185,10 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    //ALU_Outputs alu_outputs <- alu_unique_wrapper.func(alu_inputs);
    let alu_outputs = alu_wrapper.get_outputs;
 
-
    rule assign_alu_inputs;
       alu_wrapper.put_inputs(alu_inputs);
    endrule
+
 
    // ----------------
    // Combinational output function
@@ -200,7 +200,9 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
                              rg_stage_input,
                              cur_epoch,
                              rs1_busy,
+                             rs1_val_bypassed,
                              rs2_busy,
+                             rs2_val_bypassed,
 `ifdef ISA_F
                              frs1_busy,
                              frs2_busy,
@@ -211,7 +213,6 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    endrule
 
    let fv_out = stage1_wrapper.get_outputs;
-
 
 
    // ================================================================

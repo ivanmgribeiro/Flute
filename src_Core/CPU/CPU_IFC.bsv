@@ -26,6 +26,9 @@ import DM_CPU_Req_Rsp :: *;
 
 `ifdef INCLUDE_TANDEM_VERIF
 import TV_Info         :: *;
+`elsif RVFI
+import Verifier :: *;
+import RVFI_DII :: *;
 `endif
 
 // ================================================================
@@ -83,8 +86,15 @@ interface CPU_IFC;
    // ----------------
    // Optional interface to Tandem Verifier
 
+`ifdef RVFI_DII
+   interface Flute_RVFI_DII_Server rvfi_dii_server;
+`else
 `ifdef INCLUDE_TANDEM_VERIF
    interface Get #(Trace_Data)  trace_data_out;
+`endif
+`ifdef RVFI
+   interface Get #(Trace_Data)  trace_data_out;
+`endif
 `endif
 
    // ----------------

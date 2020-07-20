@@ -399,6 +399,10 @@ module mkCore (Core_IFC #(N_External_Interrupt_Sources));
    endinterface
 `endif
 
+`ifdef RVFI_DII
+   interface Flute_RVFI_DII_Server rvfi_dii_server = cpu.rvfi_dii_server;
+`endif
+
    // ----------------------------------------------------------------
    // Optional DM interfaces
 

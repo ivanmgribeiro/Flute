@@ -65,6 +65,11 @@ def main (argv = None):
     # For Piccolo and Flute, we always have Priv U (along with Priv M)
     if (not "U" in arch): arch = arch + "U"
 
+    rvfi_dii = ""
+    if ("RVFI_DII" in arch):
+        rvfi_dii = "_RVFI_DII"
+        arch = arch.replace("_RVFI_DII", "")
+
     if (not (arch.startswith ("RV32") or arch.startswith ("RV64"))):
         sys.stdout.write ("Error in command-line arg 1 (<arch>='{0}')\n".format (arch))
         sys.stdout.write ("    Should begin with 'RV32' or 'RV64'\n")
@@ -96,8 +101,8 @@ def main (argv = None):
         sys.stdout.write ("\n")
         return 1
 
-    arch = canonical_arch_string (arch)
-    sys.stdout.write ("Canonical arch string is:  '{0}'\n".format (arch))
+    arch_canon = canonical_arch_string (arch)
+    sys.stdout.write ("Canonical arch string is:  '{0}'\n".format (arch_canon))
 
     # ----------------
     # Collect <sim> and check if legal
@@ -133,10 +138,11 @@ def main (argv = None):
         sys.stdout.write ("\n")
         return 1
 
+
     # ----------------
     # All args collected; create the build directory and its Makefile
 
-    make_build_dir (repo, repobase, arch, sim, debug, tv)
+    make_build_dir (repo, repobase, arch_canon, sim, debug, tv, rvfi_dii)
 
     return 0
 
@@ -168,7 +174,7 @@ def canonical_arch_string (arch):
 # ================================================================
 # Create the build directory and its Makefile
 
-def make_build_dir (repo, repobase, arch, sim, debug, tv):
+def make_build_dir (repo, repobase, arch, sim, debug, tv, rvfi_dii):
 
     # debugging only
     if False:
@@ -178,6 +184,7 @@ def make_build_dir (repo, repobase, arch, sim, debug, tv):
         sys.stdout.write ("sim      = '{0}'\n".format (sim))
         sys.stdout.write ("debug    = '{0}'\n".format (debug))
         sys.stdout.write ("tv       = '{0}'\n".format (tv))
+        sys.stdout.write ("RVFI_DII = '{0}'\n".format (rvfi_dii))
         return
 
     # Create the directory
@@ -283,6 +290,10 @@ def make_build_dir (repo, repobase, arch, sim, debug, tv):
     # Support for Bluespec Tandem Verification traces
     if (tv != ""):
         fo.write ("\t-D INCLUDE_TANDEM_VERIF  \\\n")
+
+    if (rvfi_dii != ""):
+        fo.write ("\t-D RVFI_DII  \\\n")
+        fo.write ("\t-D RVFI  \\\n")
 
     fo.write ("\n")
 

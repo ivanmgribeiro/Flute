@@ -112,13 +112,22 @@ interface IMem_IFC;
 		       Priv_Mode  priv,
 		       Bit #(1)   sstatus_SUM,
 		       Bit #(1)   mstatus_MXR,
-		       WordXL     satp);    // { VM_Mode, ASID, PPN_for_page_table }
+		       WordXL     satp
+`ifdef RVFI_DII
+                       ,Dii_Id seq_req
+`endif
+               );    // { VM_Mode, ASID, PPN_for_page_table }
 
    // CPU side: IMem response
    (* always_ready *)  method Bool     valid;
    (* always_ready *)  method Bool     is_i32_not_i16;
    (* always_ready *)  method WordXL   pc;
-   (* always_ready *)  method Instr    instr;
+   (* always_ready *)  method
+`ifdef RVFI_DII
+                              Tuple2#(Instr, Dii_Id) instr;
+`else
+                              Instr    instr;
+`endif
    (* always_ready *)  method Bool     exc;
    (* always_ready *)  method Exc_Code exc_code;
    (* always_ready *)  method WordXL   tval;        // can be different from PC

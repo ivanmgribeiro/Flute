@@ -45,6 +45,11 @@ import Cur_Cycle  :: *;
 
 import ISA_Decls     :: *;
 
+`ifdef RVFI
+import Verifier :: *;
+import RVFI_DII :: *;
+`endif
+
 import TV_Info       :: *;
 
 import CPU_Globals      :: *;
@@ -179,9 +184,12 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
                                 rg_stage2,
                                 dcache.valid,
                                 dcache.exc_code,
-                                dcache.word64,
-                                mbox.valid,
-                                mbox.word);
+                                dcache.word64
+`ifdef ISA_M
+                                ,mbox.valid,
+                                mbox.word
+`endif
+                                );
    endrule
 
    let fv_out = stage2_wrapper.get_outputs;

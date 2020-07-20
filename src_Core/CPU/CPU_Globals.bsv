@@ -238,6 +238,9 @@ endinstance
 
 typedef struct {
    Addr       pc;
+`ifdef RVFI_DII
+   Dii_Id instr_seq;
+`endif
    Epoch      epoch;              // Branch prediction epoch
    Priv_Mode  priv;               // Priv at which instr was fetched
    Bool       is_i32_not_i16;     // True if a regular 32b instr, not a compressed (16b) instr
@@ -293,6 +296,9 @@ endinstance
 
 typedef struct {
    Addr           pc;
+`ifdef RVFI_DII
+   Dii_Id instr_seq;
+`endif
    Priv_Mode      priv;               // Priv at which instr was fetched
    Epoch          epoch;              // Branch prediction epoch
 
@@ -422,6 +428,9 @@ typedef struct {
    Addr       pc;
    Instr      instr;             // For debugging. Just funct3, funct7 are
                                  // enough for functionality.
+`ifdef RVFI_DII
+   Dii_Id instr_seq;
+`endif
    Op_Stage2  op_stage2;
    RegName    rd;
    Addr       addr;              // Branch, jump: newPC
@@ -446,8 +455,38 @@ typedef struct {
 `ifdef INCLUDE_TANDEM_VERIF
    Trace_Data  trace_data;
 `endif
+`ifdef RVFI
+   Data_RVFI_Stage1 info_RVFI_s1;
+`endif
    } Data_Stage1_to_Stage2
 deriving (Bits);
+
+
+`ifdef RVFI
+typedef struct {
+    Bit#(ILEN)  instr;
+    // From decode
+    Bit#(5)     rs1_addr;
+    Bit#(5)     rs2_addr;
+    Bit#(XLEN)  rs1_data;
+    Bit#(XLEN)  rs2_data;
+    Bit#(XLEN)  pc_rdata;
+    // TODO: Exceptions?
+    Bit#(XLEN)  pc_wdata;
+    // TODO: Needs 0'ing when unused?
+    Bit#(MEMWIDTH)  mem_wdata;
+
+    // From ALU:
+    Bit#(5)     rd_addr;
+    // Might be killed by memory OPs.
+    Bool        rd_alu;
+    Bit#(XLEN)  rd_wdata_alu;
+
+    Bit#(XLEN)  mem_addr;
+
+} Data_RVFI_Stage1 deriving (Bits, Eq);
+`endif
+
 
 instance FShow #(Data_Stage1_to_Stage2);
    function Fmt fshow (Data_Stage1_to_Stage2 x);
@@ -505,11 +544,18 @@ endinstance
 typedef struct {
    Addr      pc;            // For debugging only
    Instr     instr;         // For debugging only
+`ifdef RVFI_DII
+   Dii_Id instr_seq;
+`endif
    Priv_Mode priv;
 
    Bool      rd_valid;
    RegName   rd;
    WordXL    rd_val;
+
+`ifdef RVFI
+   Data_RVFI_Stage2 info_RVFI_s2;
+`endif
 
 `ifdef ISA_F
    Bool      upd_flags;
@@ -523,6 +569,18 @@ typedef struct {
 `endif
    } Data_Stage2_to_Stage3
 deriving (Bits);
+
+`ifdef RVFI
+typedef struct {
+    Data_RVFI_Stage1    stage1;
+    // Hard to know what was written as SC pretends to write "0" on failure
+    // instead of actual untouched value. So, indicate wmask = 0 perhaps?
+
+    Bit#(TDiv#(MEMWIDTH,8))       mem_rmask;
+    Bit#(TDiv#(MEMWIDTH,8))       mem_wmask;
+
+}   Data_RVFI_Stage2 deriving (Bits);
+`endif
 
 instance FShow #(Data_Stage2_to_Stage3);
    function Fmt fshow (Data_Stage2_to_Stage3 x);

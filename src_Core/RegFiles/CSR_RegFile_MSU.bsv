@@ -292,6 +292,12 @@ deriving (Eq, Bits, FShow);
 (* synthesize *)
 module mkCSR_RegFile (CSR_RegFile_IFC);
 
+`ifdef RVFI_DII
+   let mkCSRReg = mkReg(unpack(0));
+`else
+   let mkCSRReg = mkRegU;
+`endif
+
    Reg #(Bit #(4)) cfg_verbosity <- mkConfigReg (0);
    Reg #(RF_State) rg_state      <- mkReg (RF_RESET_START);
 
@@ -303,8 +309,8 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    // CSRs
    // User-mode CSRs
 `ifdef ISA_F
-   Reg #(Bit #(5)) rg_fflags <- mkRegU;    // floating point flags
-   Reg #(Bit #(3)) rg_frm    <- mkRegU;    // floating point rounding mode
+   Reg #(Bit #(5)) rg_fflags <- mkCSRReg;    // floating point flags
+   Reg #(Bit #(3)) rg_frm    <- mkCSRReg;    // floating point rounding mode
 `endif
 
    // Supervisor-mode CSRs
@@ -315,18 +321,18 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    // sie     is a restricted view of mie
    // sip     is a restricted view of mip
 
-   Reg #(MTVec)      rg_stvec     <- mkRegU;
+   Reg #(MTVec)      rg_stvec     <- mkCSRReg;
    // scounteren hardwired to 0 for now
 
-   Reg #(Word)       rg_sscratch  <- mkRegU;
-   Reg #(Word)       rg_sepc      <- mkRegU;
-   Reg #(MCause)     rg_scause    <- mkRegU;
-   Reg #(Word)       rg_stval     <- mkRegU;
+   Reg #(Word)       rg_sscratch  <- mkCSRReg;
+   Reg #(Word)       rg_sepc      <- mkCSRReg;
+   Reg #(MCause)     rg_scause    <- mkCSRReg;
+   Reg #(Word)       rg_stval     <- mkCSRReg;
 
-   Reg #(WordXL)     rg_satp      <- mkRegU;
+   Reg #(WordXL)     rg_satp      <- mkCSRReg;
 
-   Reg #(Bit #(16))  rg_medeleg   <- mkRegU;    // TODO: also in M-U systems with user-level traps
-   Reg #(Bit #(12))  rg_mideleg   <- mkRegU;    // TODO: also in M-U systems with user-level traps
+   Reg #(Bit #(16))  rg_medeleg   <- mkCSRReg;    // TODO: also in M-U systems with user-level traps
+   Reg #(Bit #(12))  rg_mideleg   <- mkCSRReg;    // TODO: also in M-U systems with user-level traps
 `else
    Bit #(16)         rg_medeleg   = 0;
    Bit #(12)         rg_mideleg   = 0;
@@ -344,13 +350,13 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    CSR_MIE_IFC       csr_mie       <- mkCSR_MIE;
    CSR_MIP_IFC       csr_mip       <- mkCSR_MIP;
 
-   Reg #(MTVec)      rg_mtvec      <- mkRegU;
-   Reg #(MCounteren) rg_mcounteren <- mkRegU;
+   Reg #(MTVec)      rg_mtvec      <- mkCSRReg;
+   Reg #(MCounteren) rg_mcounteren <- mkCSRReg;
 
-   Reg #(Word)       rg_mscratch <- mkRegU;
-   Reg #(Word)       rg_mepc     <- mkRegU;
-   Reg #(MCause)     rg_mcause   <- mkRegU;
-   Reg #(Word)       rg_mtval    <- mkRegU;
+   Reg #(Word)       rg_mscratch <- mkCSRReg;
+   Reg #(Word)       rg_mepc     <- mkCSRReg;
+   Reg #(MCause)     rg_mcause   <- mkCSRReg;
+   Reg #(Word)       rg_mtval    <- mkCSRReg;
 
    // RegFile #(Bit #(2), WordXL)  rf_pmpcfg   <- mkRegFileFull;
    // Vector #(16, Reg #(WordXL))  vrg_pmpaddr <- replicateM (mkRegU);
@@ -367,20 +373,20 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    PulseWire          pw_minstret_incr <- mkPulseWire;
 
    // Debug/Trace
-   Reg #(WordXL)    rg_tselect <- mkRegU;
-   Reg #(WordXL)    rg_tdata1  <- mkRegU;
-   Reg #(WordXL)    rg_tdata2  <- mkRegU;
-   Reg #(WordXL)    rg_tdata3  <- mkRegU;
+   Reg #(WordXL)    rg_tselect <- mkCSRReg;
+   Reg #(WordXL)    rg_tdata1  <- mkCSRReg;
+   Reg #(WordXL)    rg_tdata2  <- mkCSRReg;
+   Reg #(WordXL)    rg_tdata3  <- mkCSRReg;
 
    // Debug
-   Reg #(Bit #(32)) rg_dcsr      <- mkRegU;    // Is 32b even in RV64
-   Reg #(WordXL)    rg_dpc       <- mkRegU;
-   Reg #(WordXL)    rg_dscratch0 <- mkRegU;
-   Reg #(WordXL)    rg_dscratch1 <- mkRegU;
+   Reg #(Bit #(32)) rg_dcsr      <- mkCSRReg;    // Is 32b even in RV64
+   Reg #(WordXL)    rg_dpc       <- mkCSRReg;
+   Reg #(WordXL)    rg_dscratch0 <- mkCSRReg;
+   Reg #(WordXL)    rg_dscratch1 <- mkCSRReg;
 
    // Non-maskable interrupt
    Reg #(Bool)    rg_nmi <- mkReg (False);
-   Reg #(WordXL)  rg_nmi_vector <- mkRegU;
+   Reg #(WordXL)  rg_nmi_vector <- mkCSRReg;
 
    // ================================================================
    // BEHAVIOR: RESET
