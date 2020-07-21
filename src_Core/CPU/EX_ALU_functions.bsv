@@ -1302,95 +1302,266 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    //
    AdderInt addop1 = (?);
    AdderInt addop2 = (?);
+   //WordXL sh_op = (?);
+   //Bit#(TLog#(XLEN)) sh_amt = (?);
+
+   // TODO fv_OP_32 needs these to be 32 bits
+   let rs1_val = inputs.rs1_val;
+   let rs2_val = inputs.rs2_val;
+
+   // Signed versions of rs1_val and rs2_val
+   IntXL s_rs1_val = unpack (inputs.rs1_val);
+   IntXL s_rs2_val = unpack (inputs.rs2_val);
+
    let fallthru_pc = fall_through_pc (inputs);
 
+   Bit #(1) instr_b30  = inputs.instr [30];
+   Bool subtract   = ((inputs.decoded_instr.opcode == op_OP) && (instr_b30 == 1'b1));
+
+   let    funct3 = inputs.decoded_instr.funct3;
+
+   let funct10 = inputs.decoded_instr.funct10;
+
+   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm20_U, 12'b0}));
+   IntXL  pc_s   = unpack (inputs.pc);
+
+   IntXL  imm_i_s = extend (unpack (inputs.decoded_instr.imm12_I));
+   IntXL  imm_s_s = extend (unpack (inputs.decoded_instr.imm12_S));
+
+   Bit #(32) rs1_val_b32 = rs1_val [31:0];
+   Bit #(32) rs2_val_b32 = rs2_val [31:0];
+
+   // Signed version of rs1_val_b32 and rs2_val_b32
+   Int #(32) s_rs1_val_b32 = unpack (rs1_val_b32);
+   Int #(32) s_rs2_val_b32 = unpack (rs2_val_b32);
+
+
+
+   //
+   // get the operands for addition
+   //
    if (inputs.decoded_instr.opcode == op_BRANCH) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_BRANCH_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      IntXL offset = extend (unpack (inputs.decoded_instr.imm13_SB));
+      //Addr  branch_target = pack (unpack (inputs.pc) + offset);
+      addop1 = {unpack(inputs.pc), 1'b0};
+      addop2 = {pack(offset), 1'b0};
    end
 
    else if (inputs.decoded_instr.opcode == op_JAL) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_JAL_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      IntXL offset = extend (unpack (inputs.decoded_instr.imm21_UJ));
+      //Addr  next_pc = pack (s_rs1_val + offset);
+      addop1 = {unpack(inputs.pc), 1'b0};
+      addop2 = {pack(offset), 1'b0};
    end
 
    else if (inputs.decoded_instr.opcode == op_JALR) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_JALR_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      IntXL offset    = extend (unpack (inputs.decoded_instr.imm12_I));
+      //Addr  next_pc   = pack (s_rs1_val + offset);
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(offset), 1'b0};
    end
 
    else if (   (inputs.decoded_instr.opcode == op_OP_IMM)
 	    || (inputs.decoded_instr.opcode == op_OP)) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_OP_and_OP_IMM_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      IntXL  s_rs2_val_local = s_rs2_val;
+      WordXL rs2_val_local   = rs2_val;
+
+      if (inputs.decoded_instr.opcode == op_OP_IMM) begin
+         s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+         rs2_val_local   = pack (s_rs2_val_local);
+      end
+
+      if ((funct3 == f3_ADDI) && (! subtract)) begin
+         //rd_val = pack (s_rs1_val + s_rs2_val_local);
+         addop1 = {pack(s_rs1_val), 1'b0};
+         addop2 = {pack(s_rs2_val_local), 1'b0};
+      end else if ((funct3 == f3_ADDI) && (subtract)) begin
+         //rd_val = pack (s_rs1_val - s_rs2_val_local);
+         addop1 = {pack(s_rs1_val), 1'b1};
+         addop2 = {~pack(s_rs2_val_local), 1'b1};
+      end
    end
 
 `ifdef RV64
    else if (inputs.decoded_instr.opcode == op_OP_IMM_32) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_OP_IMM_32_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      if (funct3 == f3_ADDIW) begin
+         IntXL  s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+         //IntXL  sum       = s_rs1_val + s_rs2_val_local;
+         addop1 = {pack(s_rs1_val), 1'b0};
+         addop2 = {pack(s_rs2_val_local), 1'b0};
+      end
    end
 
    else if (inputs.decoded_instr.opcode == op_OP_32) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_OP_32_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+
+
+      if (funct10 == f10_ADDW) begin
+         //rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
+         addop1 = extend({pack(s_rs1_val_b32), 1'b0});
+         addop2 = extend({pack(s_rs2_val_b32), 1'b0});
+      end else if (funct10 == f10_SUBW) begin
+         //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
+         addop1 = extend({pack(s_rs1_val_b32), 1'b1});
+         addop2 = extend({~pack(s_rs2_val_b32), 1'b1});
+      end
    end
 `endif
 
    else if (inputs.decoded_instr.opcode == op_AUIPC) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_AUIPC_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      //WordXL rd_val = pack (pc_s + iv);
+      addop1 = {pack(pc_s), 1'b0};
+      addop2 = {pack(iv), 1'b0};
    end
 
    else if (inputs.decoded_instr.opcode == op_LOAD) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_LD_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      //WordXL eaddr = pack (s_rs1_val + imm_s);
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(imm_i_s), 1'b0};
    end
 
    else if (inputs.decoded_instr.opcode == op_STORE) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_ST_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      //WordXL eaddr     = pack (s_rs1_val + imm_s);
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(imm_s_s), 1'b0};
    end
 
 `ifdef ISA_F
    else if (   (inputs.decoded_instr.opcode == op_LOAD_FP)) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_LD_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      //WordXL eaddr = pack (s_rs1_val + imm_s);
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(imm_i_s), 1'b0};
    end
 
    else if (   (inputs.decoded_instr.opcode == op_STORE_FP)) begin
-      match {.addop1_tmp, .addop2_tmp} = fv_ST_operands (inputs);
-      addop1 = addop1_tmp;
-      addop2 = addop2_tmp;
+      //WordXL eaddr     = pack (s_rs1_val + imm_s);
+      addop1 = {pack(s_rs1_val), 1'b0};
+      addop2 = {pack(imm_s_s), 1'b0};
    end
 `endif
 
+   // ##############################################
+   //
+   // Actual adder
+   //
+   // ##############################################
    let sum_tmp = addop1 + addop2;
    IntXL sum = unpack(sum_tmp[valueof(XLEN):1]);
+
+
+   Bool misaligned_target = (pack(sum)[1] == 1'b1);
+`ifdef ISA_C
+   misaligned_target = False;
+`endif
+
 
    //
    // do the operations given the sum
    //
    if (inputs.decoded_instr.opcode == op_BRANCH) begin
-      alu_outputs = fv_BRANCH (inputs, sum, fallthru_pc);
+      //Addr  branch_target = pack (unpack (inputs.pc) + offset);
+      Addr  branch_target = pack (sum);
+      Bool  branch_taken  = False;
+      Bool  trap          = False;
+
+      // TODO move this to be shared above
+      if      (funct3 == f3_BEQ)  branch_taken = (rs1_val  == rs2_val);
+      else if (funct3 == f3_BNE)  branch_taken = (rs1_val  != rs2_val);
+      else if (funct3 == f3_BLT)  branch_taken = (s_rs1_val <  s_rs2_val);
+      else if (funct3 == f3_BGE)  branch_taken = (s_rs1_val >= s_rs2_val);
+      else if (funct3 == f3_BLTU) branch_taken = (rs1_val  <  rs2_val);
+      else if (funct3 == f3_BGEU) branch_taken = (rs1_val  >= rs2_val);
+      else                        trap = True;
+
+
+      Exc_Code exc_code = exc_code_ILLEGAL_INSTRUCTION;
+      if ((! trap) && branch_taken && misaligned_target) begin
+         trap = True;
+         exc_code = exc_code_INSTR_ADDR_MISALIGNED;
+      end
+
+      let cf_info   = CF_Info {cf_op       : CF_BR,
+           		    from_PC     : inputs.pc,
+           		    taken       : branch_taken,
+           		    fallthru_PC : fallthru_pc,
+           		    taken_PC    : branch_target };
+
+      let next_pc     = (branch_taken ? branch_target : fallthru_pc);
+      alu_outputs.control   = (trap ? CONTROL_TRAP : (branch_taken ? CONTROL_BRANCH : CONTROL_STRAIGHT));
+      alu_outputs.exc_code  = exc_code;
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = 0;
+      alu_outputs.addr      = next_pc;
+      alu_outputs.val2      = extend (branch_target);    // For tandem verifier only
+
+      alu_outputs.cf_info   = cf_info;
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_OTHER (next_pc,
+					   fv_trace_isize (inputs),
+					   fv_trace_instr (inputs));
+`endif
    end
 
-   else if (inputs.decoded_instr.opcode == op_JAL)
-      alu_outputs = fv_JAL (inputs, sum, fallthru_pc);
+   else if (inputs.decoded_instr.opcode == op_JAL) begin
+      //Addr  next_pc = pack (s_rs1_val + offset);
+      Addr  next_pc = pack (sum);
+      Addr  ret_pc  = fallthru_pc;
 
-   else if (inputs.decoded_instr.opcode == op_JALR)
-      alu_outputs = fv_JALR (inputs, sum, fallthru_pc);
+      let cf_info   = CF_Info {cf_op       : CF_JAL,
+           		       from_PC     : inputs.pc,
+           		       taken       : True,
+           		       fallthru_PC : ret_pc,
+           		       taken_PC    : next_pc };
 
+      alu_outputs.control   = (misaligned_target ? CONTROL_TRAP : CONTROL_BRANCH);
+      alu_outputs.exc_code  = exc_code_INSTR_ADDR_MISALIGNED;
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.addr      = next_pc;
+      alu_outputs.val1      = extend (ret_pc);
+      alu_outputs.cf_info   = cf_info;
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (next_pc,
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     ret_pc);
+`endif
+   end
+
+   else if (inputs.decoded_instr.opcode == op_JALR) begin
+      //Addr  next_pc   = pack (s_rs1_val + offset);
+      Addr  next_pc   = pack (sum);
+      Addr  ret_pc    = fallthru_pc;
+
+      // next_pc [0] should be cleared
+      next_pc [0] = 1'b0;
+      let cf_info   = CF_Info {cf_op       : CF_JALR,
+			       from_PC     : inputs.pc,
+			       taken       : True,
+			       fallthru_PC : ret_pc,
+			       taken_PC    : next_pc };
+
+      alu_outputs.control   = (misaligned_target ? CONTROL_TRAP : CONTROL_BRANCH);
+      alu_outputs.exc_code  = exc_code_INSTR_ADDR_MISALIGNED;
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.addr      = next_pc;
+      alu_outputs.val1      = extend (ret_pc);
+      alu_outputs.cf_info   = cf_info;
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (next_pc,
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     ret_pc);
+`endif
+
+   end
 `ifdef ISA_M
    // OP 'M' ops MUL/ MULH/ MULHSU/ MULHU/ DIV/ DIVU/ REM/ REMU
    else if (   (inputs.decoded_instr.opcode == op_OP)
@@ -1440,51 +1611,412 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 		|| (inputs.decoded_instr.opcode == op_OP))
 	    && (   (inputs.decoded_instr.funct3 == f3_SLLI)
 		|| (inputs.decoded_instr.funct3 == f3_SRLI)
-		|| (inputs.decoded_instr.funct3 == f3_SRAI)))
-      alu_outputs = fv_OP_and_OP_IMM_shifts (inputs);
+		|| (inputs.decoded_instr.funct3 == f3_SRAI))) begin
+
+      Bit #(TLog #(XLEN)) shamt = (  (inputs.decoded_instr.opcode == op_OP_IMM)
+				   ? truncate (inputs.decoded_instr.imm12_I)
+				   : truncate (rs2_val));
+
+      WordXL   rd_val    = ?;
+
+`ifdef SHIFT_BARREL
+      // Shifts implemented by Verilog synthesis,
+      // mapping to barrel shifters
+      if (funct3 == f3_SLLI)
+         rd_val = (rs1_val << shamt);
+      else begin // assert: (funct3 == f3_SRxI)
+         if (instr_b30 == 1'b0)
+            // SRL/SRLI
+            rd_val = (rs1_val >> shamt);
+         else
+            // SRA/SRAI
+            rd_val = pack (s_rs1_val >> shamt);
+      end
+`endif
+
+`ifdef SHIFT_MULT
+      // Shifts implemented using multiplication by 2^shamt,
+      // mapping to DSPs in FPGA
+      if (funct3 == f3_SLLI)
+         rd_val = fn_shl (rs1_val, shamt);  // in LUTRAMs/DSPs
+      else begin // assert: (funct3 == f3_SRxI)
+         if (instr_b30 == 1'b0) begin
+            // SRL/SRLI
+            rd_val = fn_shrl (rs1_val, shamt);  // in LUTRAMs/DSPs
+         else
+            // SRA/SRAI
+            rd_val = fn_shra (rs1_val, shamt);     // in LUTRAMs/DSPs
+      end
+`endif
+
+      // TODO deal with left shifts being reversed
+      // Trap in RV32 if shamt > 31, i.e., if imm12_I [5] is 1
+      Bool trap = ((rv_version == RV32) && (inputs.decoded_instr.imm12_I [5] == 1));
+
+      alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+
+`ifndef SHIFT_SERIAL
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.val1      = rd_val;
+`else
+      // Will be executed in serial Shifter_Box later
+      alu_outputs.op_stage2 = OP_Stage2_SH;
+      alu_outputs.val1      = rs1_val;
+      // Encode 'arith-shift' in bit [7] of val2
+      WordXL val2 = extend (shamt);
+      val2 = (val2 | { 0, instr_b30, 7'b0});
+      alu_outputs.val2 = val2;
+`endif
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (fall_through_pc (inputs),
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     rd_val);
+`endif
+   end
 
    // Remaining OP_IMM and OP (excluding shifts and 'M' ops MUL/DIV/REM)
    else if (   (inputs.decoded_instr.opcode == op_OP_IMM)
-	    || (inputs.decoded_instr.opcode == op_OP))
-      alu_outputs = fv_OP_and_OP_IMM (inputs, sum);
+	    || (inputs.decoded_instr.opcode == op_OP)) begin
+      IntXL  s_rs2_val_local = s_rs2_val;
+      WordXL rs2_val_local   = rs2_val;
+
+      if (inputs.decoded_instr.opcode == op_OP_IMM) begin
+         s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+         rs2_val_local   = pack (s_rs2_val_local);
+      end
+
+      Bool trap   = False;
+      WordXL rd_val = ?;
+
+      //if      ((funct3 == f3_ADDI) && (! subtract)) rd_val = pack (s_rs1_val + s_rs2_val_local);
+      //else if ((funct3 == f3_ADDI) && (subtract))   rd_val = pack (s_rs1_val - s_rs2_val_local);
+      if      ((funct3 == f3_ADDI) && (! subtract)) rd_val = pack (sum);
+      else if ((funct3 == f3_ADDI) && (subtract))   rd_val = pack (sum);
+
+      else if (funct3 == f3_SLTI)  rd_val = ((s_rs1_val < s_rs2_val_local) ? 1 : 0);
+      else if (funct3 == f3_SLTIU) rd_val = ((rs1_val  < rs2_val_local)  ? 1 : 0);
+      else if (funct3 == f3_XORI)  rd_val = pack (s_rs1_val ^ s_rs2_val_local);
+      else if (funct3 == f3_ORI)   rd_val = pack (s_rs1_val | s_rs2_val_local);
+      else if (funct3 == f3_ANDI)  rd_val = pack (s_rs1_val & s_rs2_val_local);
+      else
+         trap = True;
+
+      alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.val1      = rd_val;
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (fall_through_pc (inputs),
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     rd_val);
+`endif
+   end
 
 `ifdef RV64
-   else if (inputs.decoded_instr.opcode == op_OP_IMM_32)
-      alu_outputs = fv_OP_IMM_32 (inputs, sum);
+   else if (inputs.decoded_instr.opcode == op_OP_IMM_32) begin
+      Bit #(5) shamt       = truncate (inputs.decoded_instr.imm12_I);
+      Bool     shamt5_is_0 = (inputs.instr [25] == 1'b0);
+
+      Bool   trap   = False;
+      WordXL rd_val = ?;
+
+      if (funct3 == f3_ADDIW) begin
+         //IntXL  sum       = s_rs1_val + s_rs2_val;
+         // TODO find a better way of doing this
+         WordXL tmp       = pack (sum);
+         rd_val           = signExtend (tmp [31:0]);
+      end
+      else if ((funct3 == f3_SLLIW) && shamt5_is_0) begin
+         Bit #(32) tmp = truncate (rs1_val);
+         rd_val = signExtend (tmp << shamt);
+      end
+      else if ((funct3 == f3_SRxIW) && shamt5_is_0) begin
+         if (instr_b30 == 1'b0) begin
+            // SRLIW
+            Bit #(32) tmp = truncate (rs1_val);
+            rd_val = signExtend (tmp >> shamt);
+         end
+         else begin
+            // SRAIW
+            Int #(32) s_tmp = unpack (rs1_val [31:0]);
+            Bit #(32) tmp   = pack (s_tmp >> shamt);
+            rd_val = signExtend (tmp);
+         end
+      end
+      else
+         trap = True;
+
+      alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.val1      = rd_val;
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (fall_through_pc (inputs),
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     rd_val);
+`endif
+   end
+
 
    // Remaining op_OP_32 (excluding 'M' ops)
-   else if (inputs.decoded_instr.opcode == op_OP_32)
-      alu_outputs = fv_OP_32 (inputs, sum);
+   else if (inputs.decoded_instr.opcode == op_OP_32) begin
+      Bool   trap   = False;
+      WordXL rd_val = ?;
+      Int #(32) sum_b32 = unpack(pack(sum)[31:0]);
+
+      if      (funct10 == f10_ADDW) begin
+         //rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
+         rd_val = pack (signExtend(sum_b32));
+      end
+      else if (funct10 == f10_SUBW) begin
+         //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
+         rd_val = pack (signExtend(sum_b32));
+      end
+      else if (funct10 == f10_SLLW) begin
+         rd_val = pack (signExtend (rs1_val_b32 << (rs2_val [4:0])));
+      end
+      else if (funct10 == f10_SRLW) begin
+         rd_val = pack (signExtend (rs1_val_b32 >> (rs2_val [4:0])));
+      end
+      else if (funct10 == f10_SRAW) begin
+         rd_val = pack (signExtend (s_rs1_val_b32 >> (rs2_val [4:0])));
+      end
+      else
+         trap = True;
+
+      alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.val1      = rd_val;
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (fall_through_pc (inputs),
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     rd_val);
+`endif
+   end
+
+
+
 `endif
 
-   else if (inputs.decoded_instr.opcode == op_LUI)
-      alu_outputs = fv_LUI (inputs);
+   else if (inputs.decoded_instr.opcode == op_LUI) begin
+      Bit #(32)  v32    = { inputs.decoded_instr.imm20_U, 12'h0 };
+      IntXL      iv_local     = extend (unpack (v32));
+      let        rd_val = pack (iv_local);
 
-   else if (inputs.decoded_instr.opcode == op_AUIPC)
-      alu_outputs = fv_AUIPC (inputs, sum);
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.val1      = rd_val;
 
-   else if (inputs.decoded_instr.opcode == op_LOAD)
-      alu_outputs = fv_LD (inputs, sum);
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (fall_through_pc (inputs),
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     rd_val);
+`endif
+   end
 
-   else if (inputs.decoded_instr.opcode == op_STORE)
-      alu_outputs = fv_ST (inputs, sum);
 
-   else if (inputs.decoded_instr.opcode == op_MISC_MEM)
-      alu_outputs = fv_MISC_MEM (inputs);
+   else if (inputs.decoded_instr.opcode == op_AUIPC) begin
+      //WordXL rd_val = pack (pc_s + iv);
+      WordXL rd_val = pack (sum);
+
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.val1      = rd_val;
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_I_RD (fall_through_pc (inputs),
+					     fv_trace_isize (inputs),
+					     fv_trace_instr (inputs),
+					     inputs.decoded_instr.rd,
+					     rd_val);
+`endif
+   end
+
+
+
+   else if (inputs.decoded_instr.opcode == op_LOAD) begin
+      // Signed versions of rs1_val and rs2_val
+      let opcode = inputs.decoded_instr.opcode;
+
+      //WordXL eaddr = pack (s_rs1_val + imm_s);
+      WordXL eaddr = pack (sum);
+
+      Bool legal_LD = (   (funct3 == f3_LB) || (funct3 == f3_LBU)
+		       || (funct3 == f3_LH) || (funct3 == f3_LHU)
+		       || (funct3 == f3_LW)
+`ifdef RV64
+		       || (funct3 == f3_LWU)
+		       || (funct3 == f3_LD)
+`endif
+`ifdef ISA_F
+		       || (funct3 == f3_FLW)
+`endif
+`ifdef ISA_D
+		       || (funct3 == f3_FLD)
+`endif
+		       );
+
+      // FP loads are not legal unless the MSTATUS.FS bit is set
+      Bool legal_FP_LD = True;
+`ifdef ISA_F
+      if (opcode == op_LOAD_FP)
+         legal_FP_LD = (fv_mstatus_fs (inputs.mstatus) != fs_xs_off);
+`endif
+
+
+      alu_outputs.control   = ((legal_LD && legal_FP_LD) ? CONTROL_STRAIGHT
+                                                         : CONTROL_TRAP);
+      alu_outputs.op_stage2 = OP_Stage2_LD;
+      alu_outputs.rd        = inputs.decoded_instr.rd;
+      alu_outputs.addr      = eaddr;
+`ifdef ISA_F
+      // note that the destination register for this load is in the FPR
+      alu_outputs.rd_in_fpr = (opcode == op_LOAD_FP);
+`endif
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+`ifdef ISA_F
+      if (alu_outputs.rd_in_fpr)
+         alu_outputs.trace_data = mkTrace_F_LOAD (fall_through_pc (inputs),
+					          fv_trace_isize (inputs),
+					          fv_trace_instr (inputs),
+					          inputs.decoded_instr.rd,
+					          ?,
+					          eaddr,
+                                                  inputs.mstatus);
+      else
+`endif
+         alu_outputs.trace_data = mkTrace_I_LOAD (fall_through_pc (inputs),
+					          fv_trace_isize (inputs),
+					          fv_trace_instr (inputs),
+					          inputs.decoded_instr.rd,
+					          ?,
+					          eaddr);
+`endif
+   end
+
+
+
+   else if (inputs.decoded_instr.opcode == op_STORE) begin
+      //WordXL eaddr     = pack (s_rs1_val + imm_s);
+      WordXL eaddr     = pack (sum);
+
+      let opcode = inputs.decoded_instr.opcode;
+      Bool legal_ST = (   (funct3 == f3_SB)
+		       || (funct3 == f3_SH)
+		       || (funct3 == f3_SW)
+`ifdef RV64
+		       || (funct3 == f3_SD)
+`endif
+`ifdef ISA_F
+		       || (funct3 == f3_FSW)
+`endif
+`ifdef ISA_D
+		       || (funct3 == f3_FSD)
+`endif
+		       );
+
+
+      // FP stores are not legal unless the MSTATUS.FS bit is set
+      Bool legal_FP_ST = True;
+`ifdef ISA_F
+      if (opcode == op_STORE_FP) begin
+         legal_FP_ST = (fv_mstatus_fs (inputs.mstatus) != fs_xs_off);
+
+         // note that the source data register for this store is in the FPR
+         alu_outputs.rs_frm_fpr = True;
+      end
+`endif
+
+      alu_outputs.control   = ((legal_ST && legal_FP_ST) ? CONTROL_STRAIGHT
+                                                         : CONTROL_TRAP);
+      alu_outputs.op_stage2 = OP_Stage2_ST;
+      alu_outputs.addr      = eaddr;
+
+      alu_outputs.val2      = inputs.rs2_val;
+
+`ifdef ISA_F
+      alu_outputs.fval2     = inputs.frs2_val;
+`endif
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+`ifdef ISA_F
+      if (opcode == op_STORE_FP)
+         alu_outputs.trace_data = mkTrace_F_STORE (fall_through_pc (inputs),
+						   funct3,
+						   fv_trace_isize (inputs),
+						   fv_trace_instr (inputs),
+						   alu_outputs.fval2,
+						   eaddr);
+      else
+`endif
+         alu_outputs.trace_data = mkTrace_I_STORE (fall_through_pc (inputs),
+						   funct3,
+						   fv_trace_isize (inputs),
+						   fv_trace_instr (inputs),
+						   (alu_outputs.val2),
+						   eaddr);
+`endif
+   end
+
+
+   else if (inputs.decoded_instr.opcode == op_MISC_MEM) begin
+      alu_outputs.control  = (  (inputs.decoded_instr.funct3 == f3_FENCE_I)
+			      ? CONTROL_FENCE_I
+			      : (  (inputs.decoded_instr.funct3 == f3_FENCE)
+			         ? CONTROL_FENCE
+			         : CONTROL_TRAP));
+
+`ifdef INCLUDE_TANDEM_VERIF
+      // Normal trace output (if no trap)
+      alu_outputs.trace_data = mkTrace_OTHER (fall_through_pc (inputs),
+					      fv_trace_isize (inputs),
+					      fv_trace_instr (inputs));
+`endif
+   end
+
 
    else if (inputs.decoded_instr.opcode == op_SYSTEM)
+      // TODO consider inlining this later
       alu_outputs = fv_SYSTEM (inputs);
 
 `ifdef ISA_A
    else if (inputs.decoded_instr.opcode == op_AMO)
+      // TODO consider inlining this later
       alu_outputs = fv_AMO (inputs);
 `endif
 
 `ifdef ISA_F
    else if (   (inputs.decoded_instr.opcode == op_LOAD_FP))
+      // TODO consider inlining this later
       alu_outputs = fv_LD (inputs, sum);
 
    else if (   (inputs.decoded_instr.opcode == op_STORE_FP))
+      // TODO consider inlining this later
       alu_outputs = fv_ST (inputs, sum);
 
    else if (   (inputs.decoded_instr.opcode == op_FP)
@@ -1492,6 +2024,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
             || (inputs.decoded_instr.opcode == op_FMSUB)
             || (inputs.decoded_instr.opcode == op_FNMSUB)
             || (inputs.decoded_instr.opcode == op_FNMADD))
+      // TODO consider inlining this later
       alu_outputs = fv_FP (inputs);
 `endif
 
