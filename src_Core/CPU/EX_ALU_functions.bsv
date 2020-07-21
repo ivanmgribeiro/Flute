@@ -709,6 +709,8 @@ endfunction: fv_OP_IMM_32
 // OP_32 (excluding 'M' ops: MULW/ DIVW/ DIVUW/ REMW/ REMUW)
 
 function Tuple2#(AdderInt, AdderInt) fv_OP_32_operands (ALU_Inputs inputs);
+   // these have been given a specific type because otherwise the typechecker
+   // complains about ambiguous types starting at the if(funct10 == f10_ADDW) line
    AdderInt addop1 = (?);
    AdderInt addop2 = (?);
 
@@ -1327,6 +1329,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       addop2 = addop2_tmp;
    end
 
+`ifdef RV64
    else if (inputs.decoded_instr.opcode == op_OP_IMM_32) begin
       match {.addop1_tmp, .addop2_tmp} = fv_OP_IMM_32_operands (inputs);
       addop1 = addop1_tmp;
@@ -1338,6 +1341,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       addop1 = addop1_tmp;
       addop2 = addop2_tmp;
    end
+`endif
 
    else if (inputs.decoded_instr.opcode == op_AUIPC) begin
       match {.addop1_tmp, .addop2_tmp} = fv_AUIPC_operands (inputs);
