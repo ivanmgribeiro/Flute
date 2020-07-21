@@ -20,9 +20,10 @@ interface CPU_Stage2_syn_IFC;
    (* always_ready *)
    method Action put_inputs(Bool rg_full_in,
                             Data_Stage1_to_Stage2 rg_stage2_in,
-                            Bool dcache_in,
-                            Exc_Code dmem_exc_code_in,
-                            Bit#(64) dmem_word64_in
+                            Bool dcache_valid_in,
+                            Bool dcache_exc_in,
+                            Exc_Code dcache_exc_code_in,
+                            Bit#(64) dcache_word64_in
 `ifdef ISA_M
                             ,Bool mbox_valid_in,
                             WordXL mbox_word_in
@@ -466,19 +467,22 @@ module mkCPU_Stage2_syn (CPU_Stage2_syn_IFC);
    endrule
 
 
+
    method Action put_inputs(Bool rg_full_in,
                             Data_Stage1_to_Stage2 rg_stage2_in,
                             Bool dcache_valid_in,
+                            Bool dcache_exc_in,
                             Exc_Code dcache_exc_code_in,
                             Bit#(64) dcache_word64_in
 `ifdef ISA_M
-                            Bool mbox_valid_in,
+                            ,Bool mbox_valid_in,
                             WordXL mbox_word_in
 `endif
                             );
       rg_full <= rg_full_in;
       rg_stage2 <= rg_stage2_in;
       dcache_valid <= dcache_valid_in;
+      dcache_exc <= dcache_exc_in;
       dcache_exc_code <= dcache_exc_code_in;
       dcache_word64 <= dcache_word64_in;
 `ifdef ISA_M

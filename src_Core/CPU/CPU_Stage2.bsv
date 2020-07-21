@@ -183,6 +183,7 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
       stage2_wrapper.put_inputs(rg_full,
                                 rg_stage2,
                                 dcache.valid,
+                                dcache.exc,
                                 dcache.exc_code,
                                 dcache.word64
 `ifdef ISA_M

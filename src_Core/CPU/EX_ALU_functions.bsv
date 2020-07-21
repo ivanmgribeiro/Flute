@@ -729,14 +729,14 @@ function Tuple2#(AdderInt, AdderInt) fv_OP_32_operands (ALU_Inputs inputs);
       addop2 = extend({pack(s_rs2_val), 1'b0});
    end else if (funct10 == f10_SUBW) begin
       //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
-      addop1 = extend({pack(s_rs1_val), 1'b0});
+      addop1 = extend({pack(s_rs1_val), 1'b1});
       addop2 = extend({~pack(s_rs2_val), 1'b1});
    end
 
    return tuple2(addop1, addop2);
 endfunction
 
-function ALU_Outputs fv_OP_32 (ALU_Inputs inputs, IntXL sum);
+function ALU_Outputs fv_OP_32 (ALU_Inputs inputs, IntXL sum_in);
    Bit #(32) rs1_val = inputs.rs1_val [31:0];
    Bit #(32) rs2_val = inputs.rs2_val [31:0];
 
@@ -747,14 +747,15 @@ function ALU_Outputs fv_OP_32 (ALU_Inputs inputs, IntXL sum);
    let    funct10 = inputs.decoded_instr.funct10;
    Bool   trap   = False;
    WordXL rd_val = ?;
+   Int #(32) sum = unpack(pack(sum_in)[31:0]);
 
    if      (funct10 == f10_ADDW) begin
       //rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
-      rd_val = pack (sum);
+      rd_val = pack (signExtend(sum));
    end
    else if (funct10 == f10_SUBW) begin
       //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
-      rd_val = pack (sum);
+      rd_val = pack (signExtend(sum));
    end
    else if (funct10 == f10_SLLW) begin
       rd_val = pack (signExtend (rs1_val << (rs2_val [4:0])));
