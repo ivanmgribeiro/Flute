@@ -129,6 +129,8 @@ module mkCPU_Fetch_C #(IMem_IFC  imem32) (IMem_IFC);
 				   && eq_b32_addr (rg_pc, imem32.pc)
 				   && is_32b_instr (imem32.instr [31:16]));
 
+   Addr imem_pc_plus_4 = imem32.pc + 4;
+
    // ----------------
    // Compose the 32b output 'instr' (either a 32b instr, or { 16'b0, 16b instr })
 
@@ -175,7 +177,7 @@ module mkCPU_Fetch_C #(IMem_IFC  imem32) (IMem_IFC);
 
    (* no_implicit_conditions, fire_when_enabled *)
    rule rl_fetch_next_32b (imem32.valid && cond_i32_odd_fetch_next);
-      Addr next_b32_addr = imem32.pc + 4;
+      Addr next_b32_addr = imem_pc_plus_4;
       imem32.req (rg_f3, next_b32_addr, rg_priv, rg_sstatus_SUM, rg_mstatus_MXR, rg_satp);
       rg_cache_addr <= imem32.pc;
       rg_cache_b16  <= imem32.instr [31:16];
@@ -222,7 +224,7 @@ module mkCPU_Fetch_C #(IMem_IFC  imem32) (IMem_IFC);
 	  && (addr_of_b32 == imem32.pc)
 	  && is_32b_instr (imem32.instr [31:16]))
 	 begin
-	    addr_of_b32 = addr_of_b32 + 4;
+	    addr_of_b32 = imem_pc_plus_4;
 	 end
 
       imem32.req (f3, addr_of_b32, priv, sstatus_SUM, mstatus_MXR, satp);
