@@ -114,7 +114,7 @@ typedef struct {
    } ALU_Outputs
 deriving (Bits, FShow);
 
-typedef Bit #(TAdd#(1, XLEN)) AdderInt;
+typedef Bit #(TAdd#(1, XLEN)) ALUInt;
 
 CF_Info cf_info_base = CF_Info {cf_op       : CF_None,
 				from_PC     : ?,
@@ -174,10 +174,10 @@ endmodule
 // The fall-through PC is PC+4 for normal 32b instructions,
 // and PC+2 for 'C' (16b compressed) instructions.
 function Addr fall_through_pc (ALU_Inputs  inputs);
-   Addr next_pc = inputs.pc + 4;
 `ifdef ISA_C
-   if (! inputs.is_i32_not_i16)
-      next_pc = inputs.pc + 2;
+   Addr next_pc = inputs.pc + (inputs.is_i32_not_i16 ? 4 : 2);
+`else
+   Addr next_pc = inputs.pc + 4;
 `endif
    return next_pc;
 endfunction
@@ -251,7 +251,7 @@ endfunction
 // ================================================================
 // BRANCH
 
-function Tuple2#(AdderInt, AdderInt) fv_BRANCH_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_BRANCH_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
 
@@ -336,7 +336,7 @@ endfunction
 // ----------------------------------------------------------------
 // JAL
 
-function Tuple2#(AdderInt, AdderInt) fv_JAL_operands(ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_JAL_operands(ALU_Inputs inputs);
    IntXL offset  = extend (unpack (inputs.decoded_instr.imm21_UJ));
    let addop1 = {unpack(inputs.pc), 1'b0};
    let addop2 = {pack(offset), 1'b0};
@@ -383,7 +383,7 @@ endfunction
 // ----------------------------------------------------------------
 // JALR
 
-function Tuple2#(AdderInt, AdderInt) fv_JALR_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_JALR_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
 
@@ -531,7 +531,7 @@ endfunction: fv_OP_and_OP_IMM_shifts
 // ----------------
 // Remaining OP and OP_IMM (excluding shifts, M ops MUL/DIV/REM)
 
-function Tuple2#(AdderInt, AdderInt) fv_OP_and_OP_IMM_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_OP_and_OP_IMM_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
 
@@ -626,7 +626,7 @@ endfunction: fv_OP_and_OP_IMM
 // ----------------
 // OP_IMM_32 (ADDIW, SLLIW, SRxIW)
 
-function Tuple2#(AdderInt, AdderInt) fv_OP_IMM_32_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_OP_IMM_32_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
    WordXL   rs1_val     = inputs.rs1_val;
@@ -708,11 +708,11 @@ endfunction: fv_OP_IMM_32
 // ----------------
 // OP_32 (excluding 'M' ops: MULW/ DIVW/ DIVUW/ REMW/ REMUW)
 
-function Tuple2#(AdderInt, AdderInt) fv_OP_32_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_OP_32_operands (ALU_Inputs inputs);
    // these have been given a specific type because otherwise the typechecker
    // complains about ambiguous types starting at the if(funct10 == f10_ADDW) line
-   AdderInt addop1 = (?);
-   AdderInt addop2 = (?);
+   ALUInt addop1 = (?);
+   ALUInt addop2 = (?);
 
    Bit #(32) rs1_val = inputs.rs1_val [31:0];
    Bit #(32) rs2_val = inputs.rs2_val [31:0];
@@ -814,7 +814,7 @@ endfunction
 
 
 
-function Tuple2#(AdderInt, AdderInt) fv_AUIPC_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_AUIPC_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
 
@@ -852,7 +852,7 @@ endfunction
 // ----------------------------------------------------------------
 // LOAD
 
-function Tuple2#(AdderInt, AdderInt) fv_LD_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_LD_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
 
@@ -941,7 +941,7 @@ endfunction
 // ----------------------------------------------------------------
 // STORE
 
-function Tuple2#(AdderInt, AdderInt) fv_ST_operands (ALU_Inputs inputs);
+function Tuple2#(ALUInt, ALUInt) fv_ST_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
 
@@ -1300,10 +1300,12 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    //
    // find the operands for the sum
    //
-   AdderInt addop1 = (?);
-   AdderInt addop2 = (?);
-   //WordXL sh_op = (?);
-   //Bit#(TLog#(XLEN)) sh_amt = (?);
+   ALUInt addop1 = (?);
+   ALUInt addop2 = (?);
+   ALUInt shiftop = (?);
+   // TODO maybe there is a way of making these XLEN in size rather than XLEN+1?
+   ALUInt cmpop1 = (?);
+   ALUInt cmpop2 = (?);
 
    // TODO fv_OP_32 needs these to be 32 bits
    let rs1_val = inputs.rs1_val;
@@ -1335,6 +1337,17 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    Int #(32) s_rs1_val_b32 = unpack (rs1_val_b32);
    Int #(32) s_rs2_val_b32 = unpack (rs2_val_b32);
 
+   Bit #(TLog #(XLEN)) shamt = (  (inputs.decoded_instr.opcode == op_OP_IMM)
+                               || (inputs.decoded_instr.opcode == op_OP_IMM_32))
+				   ? truncate (inputs.decoded_instr.imm12_I)
+				   : truncate (rs2_val);
+   Bool shamt5_is_0 = shamt < 32;
+   Bool shift_left = (?);
+   Bit#(1) shift_arith = (?);
+
+   Bool trap = False;
+
+
 
 
    //
@@ -1345,6 +1358,21 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       //Addr  branch_target = pack (unpack (inputs.pc) + offset);
       addop1 = {unpack(inputs.pc), 1'b0};
       addop2 = {pack(offset), 1'b0};
+      if (funct3 == f3_BEQ
+       || funct3 == f3_BNE
+       || funct3 == f3_BLTU
+       || funct3 == f3_BGEU) begin
+         cmpop1 = zeroExtend(rs1_val);
+         cmpop2 = zeroExtend(rs2_val);
+      end
+      else if (funct3 == f3_BLT
+            || funct3 == f3_BGE) begin
+         cmpop1 = pack(signExtend(s_rs1_val));
+         cmpop2 = pack(signExtend(s_rs2_val));
+      end
+      else begin
+         trap = True;
+      end
    end
 
    else if (inputs.decoded_instr.opcode == op_JAL) begin
@@ -1361,6 +1389,29 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       addop2 = {pack(offset), 1'b0};
    end
 
+   else if (   (   (inputs.decoded_instr.opcode == op_OP_IMM)
+		|| (inputs.decoded_instr.opcode == op_OP))
+	    && (   (inputs.decoded_instr.funct3 == f3_SLLI)
+		|| (inputs.decoded_instr.funct3 == f3_SRLI)
+		|| (inputs.decoded_instr.funct3 == f3_SRAI))) begin
+      if (inputs.decoded_instr.funct3 == f3_SLLI) begin
+         shift_left = True;
+         shift_arith = 0;
+         shiftop = {shift_arith, reverseBits(rs1_val)};
+      end
+      else begin
+         shift_left = False;
+         shift_arith = instr_b30;
+         if (shift_arith == 1) begin
+            shiftop = signExtend(rs1_val);
+         end
+         else begin
+            shiftop = extend(rs1_val);
+         end
+      end
+      trap = ((rv_version == RV32) && (inputs.decoded_instr.imm12_I [5] == 1));
+   end
+
    else if (   (inputs.decoded_instr.opcode == op_OP_IMM)
 	    || (inputs.decoded_instr.opcode == op_OP)) begin
       IntXL  s_rs2_val_local = s_rs2_val;
@@ -1375,10 +1426,27 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          //rd_val = pack (s_rs1_val + s_rs2_val_local);
          addop1 = {pack(s_rs1_val), 1'b0};
          addop2 = {pack(s_rs2_val_local), 1'b0};
-      end else if ((funct3 == f3_ADDI) && (subtract)) begin
+      end
+      else if ((funct3 == f3_ADDI) && (subtract)) begin
          //rd_val = pack (s_rs1_val - s_rs2_val_local);
          addop1 = {pack(s_rs1_val), 1'b1};
          addop2 = {~pack(s_rs2_val_local), 1'b1};
+      end
+      else if (funct3 == f3_SLTI) begin
+         cmpop1 = pack(signExtend(s_rs1_val));
+         cmpop2 = pack(signExtend(s_rs2_val_local));
+      end
+      else if (funct3 == f3_SLTIU) begin
+         cmpop1 = zeroExtend(rs1_val);
+         cmpop2 = zeroExtend(rs2_val_local);
+      end
+      else if (funct3 == f3_XORI
+            || funct3 == f3_ORI
+            || funct3 == f3_ANDI) begin
+         // do nothing, but don't set trap = True
+      end
+      else begin
+         trap = True;
       end
    end
 
@@ -1390,19 +1458,59 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          addop1 = {pack(s_rs1_val), 1'b0};
          addop2 = {pack(s_rs2_val_local), 1'b0};
       end
+      else if ((funct3 == f3_SLLIW) && shamt5_is_0) begin
+         shift_left = True;
+         shift_arith = 0;
+         shiftop = {shift_arith, reverseBits(extend(rs1_val_b32))};
+      end
+      else if ((funct3 == f3_SRxIW) && shamt5_is_0) begin
+         shift_left = False;
+         shift_arith = instr_b30;
+         if (shift_arith == 1) begin
+            shiftop = signExtend(rs1_val_b32);
+         end
+         else begin
+            shiftop = extend(rs1_val_b32);
+         end
+      end
+      else begin
+         trap = True;
+      end
    end
 
    else if (inputs.decoded_instr.opcode == op_OP_32) begin
-
-
+      // TODO there is probably a better way of doing this above
+      shamt = zeroExtend(shamt[4:0]);
       if (funct10 == f10_ADDW) begin
          //rd_val = pack (signExtend (s_rs1_val + s_rs2_val));
          addop1 = extend({pack(s_rs1_val_b32), 1'b0});
          addop2 = extend({pack(s_rs2_val_b32), 1'b0});
-      end else if (funct10 == f10_SUBW) begin
+      end
+      else if (funct10 == f10_SUBW) begin
          //rd_val = pack (signExtend (s_rs1_val - s_rs2_val));
          addop1 = extend({pack(s_rs1_val_b32), 1'b1});
          addop2 = extend({~pack(s_rs2_val_b32), 1'b1});
+      end
+      else if (funct10 == f10_SLLW) begin
+         //rd_val = pack (signExtend (rs1_val_b32 << (rs2_val [4:0])));
+         shift_left = True;
+         shift_arith = 0;
+         shiftop = {shift_arith, reverseBits(signExtend(rs1_val_b32))};
+      end
+      else if (funct10 == f10_SRLW) begin
+         //rd_val = pack (signExtend (rs1_val_b32 >> (rs2_val [4:0])));
+         shift_left = False;
+         shift_arith = 0;
+         shiftop = {shift_arith, shamt > 0 ? zeroExtend(rs1_val_b32) : signExtend(rs1_val_b32)};
+      end
+      else if (funct10 == f10_SRAW) begin
+         //rd_val = pack (signExtend (s_rs1_val_b32 >> (rs2_val [4:0])));
+         shift_left = False;
+         shift_arith = 1;
+         shiftop = signExtend(rs1_val_b32);
+      end
+      else begin
+         trap = True;
       end
    end
 `endif
@@ -1441,7 +1549,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
    // ##############################################
    //
-   // Actual adder
+   // Actual adder, shifter and comparisons
    //
    // ##############################################
    let sum_tmp = addop1 + addop2;
@@ -1453,6 +1561,21 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    misaligned_target = False;
 `endif
 
+   Int #(TAdd #(XLEN, 1)) shiftop_final = unpack (shiftop);
+   // TODO deal with SHIFT_MULT
+   let shift_res_full = shiftop_final >> shamt;
+   Bit #(XLEN) shift_res = shift_left ? reverseBits(truncate(pack(shift_res_full)))
+                                      : truncate(pack(shift_res_full));
+   Bit #(32) shift_res_b32 = truncate(shift_res);
+
+   Bool cmp_equal = cmpop1 == cmpop2;
+   Int #(TAdd #(XLEN, 1)) s_cmpop1 = unpack(cmpop1);
+   Int #(TAdd #(XLEN, 1)) s_cmpop2 = unpack(cmpop2);
+   Bool cmp_greater_than = s_cmpop1 > s_cmpop2;
+   Bool cmp_greater_than_eq = cmp_greater_than || cmp_equal;
+   Bool cmp_less_than_eq = !cmp_greater_than;
+   Bool cmp_less_than = !cmp_greater_than && !cmp_equal;
+
 
    //
    // do the operations given the sum
@@ -1461,16 +1584,14 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       //Addr  branch_target = pack (unpack (inputs.pc) + offset);
       Addr  branch_target = pack (sum);
       Bool  branch_taken  = False;
-      Bool  trap          = False;
 
       // TODO move this to be shared above
-      if      (funct3 == f3_BEQ)  branch_taken = (rs1_val  == rs2_val);
-      else if (funct3 == f3_BNE)  branch_taken = (rs1_val  != rs2_val);
-      else if (funct3 == f3_BLT)  branch_taken = (s_rs1_val <  s_rs2_val);
-      else if (funct3 == f3_BGE)  branch_taken = (s_rs1_val >= s_rs2_val);
-      else if (funct3 == f3_BLTU) branch_taken = (rs1_val  <  rs2_val);
-      else if (funct3 == f3_BGEU) branch_taken = (rs1_val  >= rs2_val);
-      else                        trap = True;
+      if      (funct3 == f3_BEQ)  branch_taken = cmp_equal;
+      else if (funct3 == f3_BNE)  branch_taken = !cmp_equal;
+      else if (funct3 == f3_BLT)  branch_taken = cmp_less_than;
+      else if (funct3 == f3_BGE)  branch_taken = cmp_greater_than_eq;
+      else if (funct3 == f3_BLTU) branch_taken = cmp_less_than;
+      else if (funct3 == f3_BGEU) branch_taken = cmp_greater_than_eq;
 
 
       Exc_Code exc_code = exc_code_ILLEGAL_INSTRUCTION;
@@ -1613,45 +1734,10 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 		|| (inputs.decoded_instr.funct3 == f3_SRLI)
 		|| (inputs.decoded_instr.funct3 == f3_SRAI))) begin
 
-      Bit #(TLog #(XLEN)) shamt = (  (inputs.decoded_instr.opcode == op_OP_IMM)
-				   ? truncate (inputs.decoded_instr.imm12_I)
-				   : truncate (rs2_val));
-
-      WordXL   rd_val    = ?;
-
-`ifdef SHIFT_BARREL
-      // Shifts implemented by Verilog synthesis,
-      // mapping to barrel shifters
-      if (funct3 == f3_SLLI)
-         rd_val = (rs1_val << shamt);
-      else begin // assert: (funct3 == f3_SRxI)
-         if (instr_b30 == 1'b0)
-            // SRL/SRLI
-            rd_val = (rs1_val >> shamt);
-         else
-            // SRA/SRAI
-            rd_val = pack (s_rs1_val >> shamt);
-      end
-`endif
-
-`ifdef SHIFT_MULT
-      // Shifts implemented using multiplication by 2^shamt,
-      // mapping to DSPs in FPGA
-      if (funct3 == f3_SLLI)
-         rd_val = fn_shl (rs1_val, shamt);  // in LUTRAMs/DSPs
-      else begin // assert: (funct3 == f3_SRxI)
-         if (instr_b30 == 1'b0) begin
-            // SRL/SRLI
-            rd_val = fn_shrl (rs1_val, shamt);  // in LUTRAMs/DSPs
-         else
-            // SRA/SRAI
-            rd_val = fn_shra (rs1_val, shamt);     // in LUTRAMs/DSPs
-      end
-`endif
+      WordXL   rd_val    = shift_res;
 
       // TODO deal with left shifts being reversed
       // Trap in RV32 if shamt > 31, i.e., if imm12_I [5] is 1
-      Bool trap = ((rv_version == RV32) && (inputs.decoded_instr.imm12_I [5] == 1));
 
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
       alu_outputs.rd        = inputs.decoded_instr.rd;
@@ -1690,7 +1776,6 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          rs2_val_local   = pack (s_rs2_val_local);
       end
 
-      Bool trap   = False;
       WordXL rd_val = ?;
 
       //if      ((funct3 == f3_ADDI) && (! subtract)) rd_val = pack (s_rs1_val + s_rs2_val_local);
@@ -1698,13 +1783,11 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       if      ((funct3 == f3_ADDI) && (! subtract)) rd_val = pack (sum);
       else if ((funct3 == f3_ADDI) && (subtract))   rd_val = pack (sum);
 
-      else if (funct3 == f3_SLTI)  rd_val = ((s_rs1_val < s_rs2_val_local) ? 1 : 0);
-      else if (funct3 == f3_SLTIU) rd_val = ((rs1_val  < rs2_val_local)  ? 1 : 0);
+      else if (funct3 == f3_SLTI)  rd_val = (cmp_less_than ? 1 : 0);
+      else if (funct3 == f3_SLTIU) rd_val = (cmp_less_than  ? 1 : 0);
       else if (funct3 == f3_XORI)  rd_val = pack (s_rs1_val ^ s_rs2_val_local);
       else if (funct3 == f3_ORI)   rd_val = pack (s_rs1_val | s_rs2_val_local);
       else if (funct3 == f3_ANDI)  rd_val = pack (s_rs1_val & s_rs2_val_local);
-      else
-         trap = True;
 
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
       alu_outputs.op_stage2 = OP_Stage2_ALU;
@@ -1713,7 +1796,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
 `ifdef INCLUDE_TANDEM_VERIF
       // Normal trace output (if no trap)
-      alu_outputs.trace_data = mkTrace_I_RD (fall_through_pc (inputs),
+      alu_outputs.trace_data = mkTra ce_I_RD (fall_through_pc (inputs),
 					     fv_trace_isize (inputs),
 					     fv_trace_instr (inputs),
 					     inputs.decoded_instr.rd,
@@ -1723,10 +1806,6 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
 `ifdef RV64
    else if (inputs.decoded_instr.opcode == op_OP_IMM_32) begin
-      Bit #(5) shamt       = truncate (inputs.decoded_instr.imm12_I);
-      Bool     shamt5_is_0 = (inputs.instr [25] == 1'b0);
-
-      Bool   trap   = False;
       WordXL rd_val = ?;
 
       if (funct3 == f3_ADDIW) begin
@@ -1735,25 +1814,9 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          WordXL tmp       = pack (sum);
          rd_val           = signExtend (tmp [31:0]);
       end
-      else if ((funct3 == f3_SLLIW) && shamt5_is_0) begin
-         Bit #(32) tmp = truncate (rs1_val);
-         rd_val = signExtend (tmp << shamt);
+      else if ((funct3 == f3_SLLIW || funct3 == f3_SRxIW) && shamt5_is_0) begin
+         rd_val = signExtend(shift_res_b32);
       end
-      else if ((funct3 == f3_SRxIW) && shamt5_is_0) begin
-         if (instr_b30 == 1'b0) begin
-            // SRLIW
-            Bit #(32) tmp = truncate (rs1_val);
-            rd_val = signExtend (tmp >> shamt);
-         end
-         else begin
-            // SRAIW
-            Int #(32) s_tmp = unpack (rs1_val [31:0]);
-            Bit #(32) tmp   = pack (s_tmp >> shamt);
-            rd_val = signExtend (tmp);
-         end
-      end
-      else
-         trap = True;
 
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
       alu_outputs.op_stage2 = OP_Stage2_ALU;
@@ -1773,7 +1836,6 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
    // Remaining op_OP_32 (excluding 'M' ops)
    else if (inputs.decoded_instr.opcode == op_OP_32) begin
-      Bool   trap   = False;
       WordXL rd_val = ?;
       Int #(32) sum_b32 = unpack(pack(sum)[31:0]);
 
@@ -1786,16 +1848,14 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          rd_val = pack (signExtend(sum_b32));
       end
       else if (funct10 == f10_SLLW) begin
-         rd_val = pack (signExtend (rs1_val_b32 << (rs2_val [4:0])));
+         rd_val = signExtend(shift_res_b32);
       end
       else if (funct10 == f10_SRLW) begin
-         rd_val = pack (signExtend (rs1_val_b32 >> (rs2_val [4:0])));
+         rd_val = signExtend(shift_res_b32);
       end
       else if (funct10 == f10_SRAW) begin
-         rd_val = pack (signExtend (s_rs1_val_b32 >> (rs2_val [4:0])));
+         rd_val = signExtend(shift_res_b32);
       end
-      else
-         trap = True;
 
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
       alu_outputs.op_stage2 = OP_Stage2_ALU;
