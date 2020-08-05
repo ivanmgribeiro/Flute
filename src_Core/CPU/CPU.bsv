@@ -88,6 +88,10 @@ import Near_Mem_Caches :: *;
 import Near_Mem_TCM :: *;
 `endif
 
+`ifdef Near_Mem_Avalon
+import Near_Mem_Avalon :: *;
+`endif
+
 `ifdef INCLUDE_GDB_CONTROL
 import Debug_Module   :: *;
 import DM_CPU_Req_Rsp :: *;
@@ -133,7 +137,32 @@ endfunction
 // ================================================================
 
 (* synthesize *)
+// TODO the avalon stuff was added here to keep the signals exported at the top
+// level properly named
+// This is currently used in a custom verilator simulator
+// an alternative is to instead add the avalon signals to CPU_IFC, but this means
+// that the avalon input signals will be bunched into one large wire (rather than
+// each field having its own wire). For this it would probably be best to create a
+// verilog file that splits the values into their own wires, but this would annoying
+// to maintain
+// TODO is there a way of forcing the struct to have individual names in
+// an interface?
+`ifdef Near_Mem_Avalon
+module mkCPU
+   #(Bit #(XLEN) avm_instr_readdata,
+     Bool        avm_instr_waitrequest,
+     Bool        avm_instr_readdatavalid,
+     Bit #(2)    avm_instr_response,
+
+     Bit #(XLEN) avm_data_readdata,
+     Bool        avm_data_waitrequest,
+     Bool        avm_data_readdatavalid,
+     Bit #(2)    avm_data_response
+   )
+   (CPU_IFC);
+`else
 module mkCPU (CPU_IFC);
+`endif
 
    // ----------------
    // System address map and pc reset value
@@ -653,6 +682,23 @@ module mkCPU (CPU_IFC);
 	 $display ("%0d: CPU.rl_stage1_mip_cmd: new MIP = ", mcycle, fshow(new_mip));
    endrule
 `endif
+
+`ifdef Near_Mem_Avalon
+   (* no_implicit_conditions, fire_when_enabled *)
+   rule rl_mem_values;
+      near_mem.imem_master.in(Avalon_Inputs {avm_readdata      : avm_instr_readdata,
+                                             avm_waitrequest   : avm_instr_waitrequest,
+                                             avm_readdatavalid : avm_instr_readdatavalid,
+                                             avm_response      : avm_instr_response
+      });
+      near_mem.dmem_master.in(Avalon_Inputs {avm_readdata      : avm_data_readdata,
+                                             avm_waitrequest   : avm_data_waitrequest,
+                                             avm_readdatavalid : avm_data_readdatavalid,
+                                             avm_response      : avm_data_response
+      });
+   endrule
+`endif
+
 
    // ================================================================
    // PIPELINE BEHAVIOR (excluding nonpipe special instructions and exceptions)
@@ -1903,11 +1949,29 @@ module mkCPU (CPU_IFC);
    // ----------------
    // SoC fabric connections
 
+`ifdef Near_Mem_Avalon
+   // IMem to avalon
+   method Bit #(XLEN)         avm_instr_address    = near_mem.imem_master.out.avm_address;
+   method Bool                avm_instr_read       = near_mem.imem_master.out.avm_read;
+   method Bool                avm_instr_write      = near_mem.imem_master.out.avm_write;
+   method Bit #(XLEN)         avm_instr_writedata  = near_mem.imem_master.out.avm_writedata;
+   method Bit #(Bytes_per_WordXL) avm_instr_byteenable = near_mem.imem_master.out.avm_byteenable;
+`else
    // IMem to fabric master interface
    interface  imem_master = near_mem.imem_master;
+`endif
 
+`ifdef Near_Mem_Avalon
+   // DMem to avalon
+   method Bit #(XLEN)         avm_data_address    = near_mem.dmem_master.out.avm_address;
+   method Bool                avm_data_read       = near_mem.dmem_master.out.avm_read;
+   method Bool                avm_data_write      = near_mem.dmem_master.out.avm_write;
+   method Bit #(XLEN)         avm_data_writedata  = near_mem.dmem_master.out.avm_writedata;
+   method Bit #(Bytes_per_WordXL) avm_data_byteenable = near_mem.dmem_master.out.avm_byteenable;
+`else
    // DMem to fabric master interface
    interface  dmem_master = near_mem.dmem_master;
+`endif
 
    // ----------------------------------------------------------------
    // Optional AXI4-Lite D-cache slave interface

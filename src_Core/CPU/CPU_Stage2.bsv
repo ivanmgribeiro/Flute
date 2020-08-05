@@ -54,7 +54,11 @@ import TV_Info       :: *;
 
 import CPU_Globals      :: *;
 import Near_Mem_IFC     :: *;
+`ifdef Near_Mem_Avalon
+import Near_Mem_Avalon_Common :: *;
+`else
 import MMU_Cache_Common :: *;    // for CacheOp
+`endif
 import CSR_RegFile      :: *;    // For SATP, SSTATUS, MSTATUS
 
 `ifdef SHIFT_SERIAL

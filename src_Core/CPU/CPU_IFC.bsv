@@ -13,8 +13,12 @@ import ClientServer :: *;
 
 import ISA_Decls       :: *;
 
+`ifdef Near_Mem_Avalon
+import Near_Mem_IFC :: *;
+`else
 import AXI4_Types  :: *;
 import Fabric_Defs :: *;
+`endif
 
 `ifdef INCLUDE_DMEM_SLAVE
 import AXI4_Lite_Types :: *;
@@ -41,11 +45,29 @@ interface CPU_IFC;
    // ----------------
    // SoC fabric connections
 
+`ifdef Near_Mem_Avalon
+   // IMem to avalon
+   (* always_ready *)  method Bit #(XLEN)         avm_instr_address;
+   (* always_ready *)  method Bool                avm_instr_read;
+   (* always_ready *)  method Bool                avm_instr_write;
+   (* always_ready *)  method Bit #(XLEN)         avm_instr_writedata;
+   (* always_ready *)  method Bit #(Bytes_per_WordXL) avm_instr_byteenable;
+`else
    // IMem to Fabric master interface
    interface AXI4_Master_IFC #(Wd_Id, Wd_Addr, Wd_Data, Wd_User)  imem_master;
+`endif
 
+`ifdef Near_Mem_Avalon
+   // DMem to avalon
+   (* always_ready *)  method Bit #(XLEN)         avm_data_address;
+   (* always_ready *)  method Bool                avm_data_read;
+   (* always_ready *)  method Bool                avm_data_write;
+   (* always_ready *)  method Bit #(XLEN)         avm_data_writedata;
+   (* always_ready *)  method Bit #(Bytes_per_WordXL) avm_data_byteenable;
+`else
    // DMem to Fabric master interface
    interface AXI4_Master_IFC #(Wd_Id, Wd_Addr, Wd_Data, Wd_User)  dmem_master;
+`endif
 
    // ----------------------------------------------------------------
    // Optional AXI4-Lite D-cache slave interface
