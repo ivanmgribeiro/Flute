@@ -88,7 +88,7 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
    Reg #(Epoch)      rg_epoch <- mkReg (0);               // Toggles on redirections
    Reg #(Priv_Mode)  rg_priv  <- mkRegU;
 
-   Branch_Predictor_IFC branch_predictor <- mkBranch_Predictor;
+   //Branch_Predictor_IFC branch_predictor <- mkBranch_Predictor;
 
    // ----------------------------------------------------------------
    // BEHAVIOR
@@ -110,7 +110,8 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
       let imem_instr = imem.instr;
 `endif
 
-      let pred_pc = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem_instr);
+      //let pred_pc = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem_instr);
+      let pred_pc = imem.pc + (imem.is_i32_not_i16 ? 4 : 2);
       let d = Data_StageF_to_StageD {pc:              imem.pc,
 				     epoch:           rg_epoch,
 				     priv:            rg_priv,
@@ -170,7 +171,7 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
                                                                , next_seq
 `endif
                                                                );
-      branch_predictor.predict_req (pc);    // TODO: ASID.VA vs PA?
+      //branch_predictor.predict_req (pc);    // TODO: ASID.VA vs PA?
 
       rg_epoch <= epoch;
       rg_priv  <= priv;

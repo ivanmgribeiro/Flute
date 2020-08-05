@@ -51,10 +51,17 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
    Wire#(Output_Stage1) outputs <- mkDWire (?);
 
 
-   let fall_through_pc = rg_stage_input.pc + (rg_stage_input.is_i32_not_i16 ? 4 : 2);
+   //let fall_through_pc = rg_stage_input.pc + (rg_stage_input.is_i32_not_i16 ? 4 : 2);
+//   let next_pc = ((alu_outputs.control == CONTROL_BRANCH)
+//			? alu_outputs.addr
+//			: fall_through_pc);
    let next_pc = ((alu_outputs.control == CONTROL_BRANCH)
 			? alu_outputs.addr
-			: fall_through_pc);
+                        // NOTE when we have no branch prediction, alu_outputs.cf_info.falthru_PC
+                        // is precisely the same as rg_stage_input.pred_pc; we can save an
+                        // adder here
+			// : alu_outputs.cf_info.fallthru_PC);
+			: rg_stage_input.pred_pc);
 
 `ifdef RVFI
    let info_RVFI = Data_RVFI_Stage1 {
@@ -209,7 +216,10 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 				    exc_code: alu_outputs.exc_code,
 				    tval:     tval};
 
-	 let redirect = (next_pc != rg_stage_input.pred_pc);
+         // if we are not using branch prediction, then we can remove this comparison, since
+         // next_pc is calculated in precisely the same way as pred_pc
+	 // let redirect = (next_pc != rg_stage_input.pred_pc);
+         let redirect = alu_outputs.control == CONTROL_BRANCH;
 
 	 output_stage1.ostatus        = ostatus;
 	 output_stage1.control        = alu_outputs.control;

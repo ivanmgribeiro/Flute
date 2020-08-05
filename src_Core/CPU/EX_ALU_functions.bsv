@@ -38,6 +38,8 @@ import TV_Info     :: *;
 typedef struct {
    Priv_Mode      cur_priv;
    Addr           pc;
+   // this is only the correct value when we have no branch prediction
+   Addr           fallthru_pc;
    Bool           is_i32_not_i16;
    Instr          instr;
 `ifdef ISA_C
@@ -1315,7 +1317,8 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    IntXL s_rs1_val = unpack (inputs.rs1_val);
    IntXL s_rs2_val = unpack (inputs.rs2_val);
 
-   let fallthru_pc = fall_through_pc (inputs);
+   //let fallthru_pc = fall_through_pc (inputs);
+   let fallthru_pc = inputs.fallthru_pc;
 
    Bit #(1) instr_b30  = inputs.instr [30];
    Bool subtract   = ((inputs.decoded_instr.opcode == op_OP) && (instr_b30 == 1'b1));
@@ -1347,6 +1350,13 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
    Bool trap = False;
 
+
+
+   let cf_info   = CF_Info {cf_op       : ?,
+           		    from_PC     : inputs.pc,
+           		    taken       : ?,
+           		    fallthru_PC : fallthru_pc,
+           		    taken_PC    : ? };
 
 
 
@@ -1600,7 +1610,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          exc_code = exc_code_INSTR_ADDR_MISALIGNED;
       end
 
-      let cf_info   = CF_Info {cf_op       : CF_BR,
+      cf_info   = CF_Info {cf_op       : CF_BR,
            		    from_PC     : inputs.pc,
            		    taken       : branch_taken,
            		    fallthru_PC : fallthru_pc,
@@ -1626,12 +1636,11 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    else if (inputs.decoded_instr.opcode == op_JAL) begin
       //Addr  next_pc = pack (s_rs1_val + offset);
       Addr  next_pc = pack (sum);
-      Addr  ret_pc  = fallthru_pc;
 
-      let cf_info   = CF_Info {cf_op       : CF_JAL,
+      cf_info   = CF_Info {cf_op       : CF_JAL,
            		       from_PC     : inputs.pc,
            		       taken       : True,
-           		       fallthru_PC : ret_pc,
+           		       fallthru_PC : fallthru_pc,
            		       taken_PC    : next_pc };
 
       alu_outputs.control   = (misaligned_target ? CONTROL_TRAP : CONTROL_BRANCH);
@@ -1639,7 +1648,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = inputs.decoded_instr.rd;
       alu_outputs.addr      = next_pc;
-      alu_outputs.val1      = extend (ret_pc);
+      alu_outputs.val1      = extend (fallthru_pc);
       alu_outputs.cf_info   = cf_info;
 
 `ifdef INCLUDE_TANDEM_VERIF
@@ -1648,21 +1657,20 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 					     fv_trace_isize (inputs),
 					     fv_trace_instr (inputs),
 					     inputs.decoded_instr.rd,
-					     ret_pc);
+					     fallthru_pc);
 `endif
    end
 
    else if (inputs.decoded_instr.opcode == op_JALR) begin
       //Addr  next_pc   = pack (s_rs1_val + offset);
       Addr  next_pc   = pack (sum);
-      Addr  ret_pc    = fallthru_pc;
 
       // next_pc [0] should be cleared
       next_pc [0] = 1'b0;
-      let cf_info   = CF_Info {cf_op       : CF_JALR,
+      cf_info   = CF_Info {cf_op       : CF_JALR,
 			       from_PC     : inputs.pc,
 			       taken       : True,
-			       fallthru_PC : ret_pc,
+			       fallthru_PC : fallthru_pc,
 			       taken_PC    : next_pc };
 
       alu_outputs.control   = (misaligned_target ? CONTROL_TRAP : CONTROL_BRANCH);
@@ -1670,7 +1678,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = inputs.decoded_instr.rd;
       alu_outputs.addr      = next_pc;
-      alu_outputs.val1      = extend (ret_pc);
+      alu_outputs.val1      = extend (fallthru_pc);
       alu_outputs.cf_info   = cf_info;
 
 `ifdef INCLUDE_TANDEM_VERIF
@@ -1679,7 +1687,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 					     fv_trace_isize (inputs),
 					     fv_trace_instr (inputs),
 					     inputs.decoded_instr.rd,
-					     ret_pc);
+					     fallthru_pc);
 `endif
 
    end

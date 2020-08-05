@@ -160,6 +160,7 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    // ALU function
    let alu_inputs = ALU_Inputs {cur_priv       : cur_priv,
 				pc             : rg_stage_input.pc,
+				fallthru_pc        : rg_stage_input.pred_pc,
 				is_i32_not_i16 : rg_stage_input.is_i32_not_i16,
 				instr          : rg_stage_input.instr,
 `ifdef ISA_C
