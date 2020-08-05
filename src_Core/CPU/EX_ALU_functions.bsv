@@ -262,7 +262,7 @@ function Tuple2#(ALUInt, ALUInt) fv_BRANCH_operands (ALU_Inputs inputs);
    IntXL s_rs1_val = unpack (inputs.rs1_val);
    IntXL s_rs2_val = unpack (inputs.rs2_val);
 
-   IntXL offset        = extend (unpack (inputs.decoded_instr.imm13_SB));
+   IntXL offset        = extend (unpack (inputs.decoded_instr.imm.Imm13_SB));
    //Addr  branch_target = pack (unpack (inputs.pc) + offset);
    addop1 = {unpack(inputs.pc), 1'b0};
    addop2 = {pack(offset), 1'b0};
@@ -278,7 +278,7 @@ function ALU_Outputs fv_BRANCH (ALU_Inputs inputs, IntXL sum, Addr fallthru_pc);
    IntXL s_rs1_val = unpack (inputs.rs1_val);
    IntXL s_rs2_val = unpack (inputs.rs2_val);
 
-   IntXL offset        = extend (unpack (inputs.decoded_instr.imm13_SB));
+   IntXL offset        = extend (unpack (inputs.decoded_instr.imm.Imm13_SB));
    //Addr  branch_target = pack (unpack (inputs.pc) + offset);
    Addr  branch_target = pack (sum);
    Bool  branch_taken  = False;
@@ -337,14 +337,14 @@ endfunction
 // JAL
 
 function Tuple2#(ALUInt, ALUInt) fv_JAL_operands(ALU_Inputs inputs);
-   IntXL offset  = extend (unpack (inputs.decoded_instr.imm21_UJ));
+   IntXL offset  = extend (unpack (inputs.decoded_instr.imm.Imm21_UJ));
    let addop1 = {unpack(inputs.pc), 1'b0};
    let addop2 = {pack(offset), 1'b0};
    return tuple2(addop1, addop2);
 endfunction
 
 function ALU_Outputs fv_JAL (ALU_Inputs inputs, IntXL sum, Addr fallthru_pc);
-   IntXL offset  = extend (unpack (inputs.decoded_instr.imm21_UJ));
+   IntXL offset  = extend (unpack (inputs.decoded_instr.imm.Imm21_UJ));
    //Addr  next_pc = pack (s_rs1_val + offset);
    Addr  next_pc = pack (sum);
    Addr  ret_pc  = fallthru_pc;
@@ -393,7 +393,7 @@ function Tuple2#(ALUInt, ALUInt) fv_JALR_operands (ALU_Inputs inputs);
    // Signed versions of rs1_val and rs2_val
    IntXL s_rs1_val = unpack (rs1_val);
    IntXL s_rs2_val = unpack (rs2_val);
-   IntXL offset    = extend (unpack (inputs.decoded_instr.imm12_I));
+   IntXL offset    = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
    //Addr  next_pc   = pack (s_rs1_val + offset);
 
    addop1 = {pack(s_rs1_val), 1'b0};
@@ -408,7 +408,7 @@ function ALU_Outputs fv_JALR (ALU_Inputs inputs, IntXL sum, Addr fallthru_pc);
    // Signed versions of rs1_val and rs2_val
    IntXL s_rs1_val = unpack (rs1_val);
    IntXL s_rs2_val = unpack (rs2_val);
-   IntXL offset    = extend (unpack (inputs.decoded_instr.imm12_I));
+   IntXL offset    = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
    //Addr  next_pc   = pack (s_rs1_val + offset);
    Addr  next_pc   = pack (sum);
    Addr  ret_pc    = fallthru_pc;
@@ -460,7 +460,7 @@ function ALU_Outputs fv_OP_and_OP_IMM_shifts (ALU_Inputs inputs);
    IntXL s_rs1_val = unpack (rs1_val);    // Signed version of rs1, for SRA
 
    Bit #(TLog #(XLEN)) shamt = (  (inputs.decoded_instr.opcode == op_OP_IMM)
-				? truncate (inputs.decoded_instr.imm12_I)
+				? truncate (inputs.decoded_instr.imm.Imm12_I)
 				: truncate (rs2_val));
 
    WordXL   rd_val    = ?;
@@ -498,7 +498,7 @@ function ALU_Outputs fv_OP_and_OP_IMM_shifts (ALU_Inputs inputs);
 `endif
 
    // Trap in RV32 if shamt > 31, i.e., if imm12_I [5] is 1
-   Bool trap = ((rv_version == RV32) && (inputs.decoded_instr.imm12_I [5] == 1));
+   Bool trap = ((rv_version == RV32) && (inputs.decoded_instr.imm.Imm12_I [5] == 1));
 
    let alu_outputs       = alu_outputs_base;
    alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
@@ -549,7 +549,7 @@ function Tuple2#(ALUInt, ALUInt) fv_OP_and_OP_IMM_operands (ALU_Inputs inputs);
    Bool     subtract   = ((inputs.decoded_instr.opcode == op_OP) && (instr_b30 == 1'b1));
 
    if (inputs.decoded_instr.opcode == op_OP_IMM) begin
-      s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+      s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
       rs2_val_local   = pack (s_rs2_val_local);
    end
 
@@ -585,7 +585,7 @@ function ALU_Outputs fv_OP_and_OP_IMM (ALU_Inputs inputs, IntXL sum);
    Bool     subtract   = ((inputs.decoded_instr.opcode == op_OP) && (instr_b30 == 1'b1));
 
    if (inputs.decoded_instr.opcode == op_OP_IMM) begin
-      s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+      s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
       rs2_val_local   = pack (s_rs2_val_local);
    end
 
@@ -632,7 +632,7 @@ function Tuple2#(ALUInt, ALUInt) fv_OP_IMM_32_operands (ALU_Inputs inputs);
    WordXL   rs1_val     = inputs.rs1_val;
    IntXL    s_rs1_val   = unpack (rs1_val);
 
-   Bit #(5) shamt       = truncate (inputs.decoded_instr.imm12_I);
+   Bit #(5) shamt       = truncate (inputs.decoded_instr.imm.Imm12_I);
    Bool     shamt5_is_0 = (inputs.instr [25] == 1'b0);
 
    let    funct3 = inputs.decoded_instr.funct3;
@@ -640,7 +640,7 @@ function Tuple2#(ALUInt, ALUInt) fv_OP_IMM_32_operands (ALU_Inputs inputs);
    WordXL rd_val = ?;
 
    if (funct3 == f3_ADDIW) begin
-      IntXL  s_rs2_val = extend (unpack (inputs.decoded_instr.imm12_I));
+      IntXL  s_rs2_val = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
       //IntXL  sum       = s_rs1_val + s_rs2_val;
       addop1 = {pack(s_rs1_val), 1'b0};
       addop2 = {pack(s_rs2_val), 1'b0};
@@ -653,7 +653,7 @@ function ALU_Outputs fv_OP_IMM_32 (ALU_Inputs inputs, IntXL sum_in);
    WordXL   rs1_val     = inputs.rs1_val;
    IntXL    s_rs1_val   = unpack (rs1_val);
 
-   Bit #(5) shamt       = truncate (inputs.decoded_instr.imm12_I);
+   Bit #(5) shamt       = truncate (inputs.decoded_instr.imm.Imm12_I);
    Bool     shamt5_is_0 = (inputs.instr [25] == 1'b0);
 
    let    funct3 = inputs.decoded_instr.funct3;
@@ -661,7 +661,7 @@ function ALU_Outputs fv_OP_IMM_32 (ALU_Inputs inputs, IntXL sum_in);
    WordXL rd_val = ?;
 
    if (funct3 == f3_ADDIW) begin
-      IntXL  s_rs2_val = extend (unpack (inputs.decoded_instr.imm12_I));
+      IntXL  s_rs2_val = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
       //IntXL  sum       = s_rs1_val + s_rs2_val;
       IntXL  sum       = sum_in;
       WordXL tmp       = pack (sum);
@@ -792,7 +792,7 @@ endfunction: fv_OP_32
 // Upper Immediates
 
 function ALU_Outputs fv_LUI (ALU_Inputs inputs);
-   Bit #(32)  v32    = { inputs.decoded_instr.imm20_U, 12'h0 };
+   Bit #(32)  v32    = { inputs.decoded_instr.imm.Imm20_U, 12'h0 };
    IntXL      iv     = extend (unpack (v32));
    let        rd_val = pack (iv);
 
@@ -818,7 +818,7 @@ function Tuple2#(ALUInt, ALUInt) fv_AUIPC_operands (ALU_Inputs inputs);
    let addop1 = (?);
    let addop2 = (?);
 
-   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm20_U, 12'b0}));
+   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm.Imm20_U, 12'b0}));
    IntXL  pc_s   = unpack (inputs.pc);
    //WordXL rd_val = pack (pc_s + iv);
    addop1 = {pack(pc_s), 1'b0};
@@ -828,7 +828,7 @@ function Tuple2#(ALUInt, ALUInt) fv_AUIPC_operands (ALU_Inputs inputs);
 endfunction
 
 function ALU_Outputs fv_AUIPC (ALU_Inputs inputs, IntXL sum);
-   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm20_U, 12'b0}));
+   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm.Imm20_U, 12'b0}));
    IntXL  pc_s   = unpack (inputs.pc);
    //WordXL rd_val = pack (pc_s + iv);
    WordXL rd_val = pack (sum);
@@ -861,7 +861,7 @@ function Tuple2#(ALUInt, ALUInt) fv_LD_operands (ALU_Inputs inputs);
    IntXL s_rs1_val = unpack (inputs.rs1_val);
    IntXL s_rs2_val = unpack (inputs.rs2_val);
 
-   IntXL  imm_s = extend (unpack (inputs.decoded_instr.imm12_I));
+   IntXL  imm_s = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
    //WordXL eaddr = pack (s_rs1_val + imm_s);
    addop1 = {pack(s_rs1_val), 1'b0};
    addop2 = {pack(imm_s), 1'b0};
@@ -875,7 +875,7 @@ function ALU_Outputs fv_LD (ALU_Inputs inputs, IntXL sum);
    IntXL s_rs1_val = unpack (inputs.rs1_val);
    IntXL s_rs2_val = unpack (inputs.rs2_val);
 
-   IntXL  imm_s = extend (unpack (inputs.decoded_instr.imm12_I));
+   IntXL  imm_s = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
    //WordXL eaddr = pack (s_rs1_val + imm_s);
    WordXL eaddr = pack (sum);
 
@@ -947,7 +947,7 @@ function Tuple2#(ALUInt, ALUInt) fv_ST_operands (ALU_Inputs inputs);
 
    // Signed version of rs1_val
    IntXL  s_rs1_val = unpack (inputs.rs1_val);
-   IntXL  imm_s     = extend (unpack (inputs.decoded_instr.imm12_S));
+   IntXL  imm_s     = extend (unpack (inputs.decoded_instr.imm.Imm12_S));
    //WordXL eaddr     = pack (s_rs1_val + imm_s);
    addop1 = {pack(s_rs1_val), 1'b0};
    addop2 = {pack(imm_s), 1'b0};
@@ -958,7 +958,7 @@ endfunction
 function ALU_Outputs fv_ST (ALU_Inputs inputs, IntXL sum);
    // Signed version of rs1_val
    IntXL  s_rs1_val = unpack (inputs.rs1_val);
-   IntXL  imm_s     = extend (unpack (inputs.decoded_instr.imm12_S));
+   IntXL  imm_s     = extend (unpack (inputs.decoded_instr.imm.Imm12_S));
    //WordXL eaddr     = pack (s_rs1_val + imm_s);
    WordXL eaddr     = pack (sum);
 
@@ -1076,7 +1076,7 @@ function ALU_Outputs fv_SYSTEM (ALU_Inputs inputs);
 	  && (inputs.decoded_instr.rs1 == 0))
 	 begin
 	    // ECALL instructions
-	    if (inputs.decoded_instr.imm12_I == f12_ECALL) begin
+	    if (inputs.decoded_instr.imm.Imm12_I == f12_ECALL) begin
 	       alu_outputs.control  = CONTROL_TRAP;
 	       alu_outputs.exc_code = ((inputs.cur_priv == u_Priv_Mode)
 				       ? exc_code_ECALL_FROM_U
@@ -1086,14 +1086,14 @@ function ALU_Outputs fv_SYSTEM (ALU_Inputs inputs);
 	    end
 
 	    // EBREAK instruction
-	    else if (inputs.decoded_instr.imm12_I == f12_EBREAK) begin
+	    else if (inputs.decoded_instr.imm.Imm12_I == f12_EBREAK) begin
 	       alu_outputs.control  = CONTROL_TRAP;
 	       alu_outputs.exc_code = exc_code_BREAKPOINT;
 	    end
 
 	    // MRET instruction
 	    else if (   (inputs.cur_priv >= m_Priv_Mode)
-		     && (inputs.decoded_instr.imm12_I == f12_MRET))
+		     && (inputs.decoded_instr.imm.Imm12_I == f12_MRET))
 	       begin
 		  alu_outputs.control = CONTROL_MRET;
 	       end
@@ -1103,7 +1103,7 @@ function ALU_Outputs fv_SYSTEM (ALU_Inputs inputs);
 	    else if (   (   (inputs.cur_priv == m_Priv_Mode)
 			 || (   (inputs.cur_priv == s_Priv_Mode)
 			     && (inputs.mstatus [mstatus_tsr_bitpos] == 0)))
-		     && (inputs.decoded_instr.imm12_I == f12_SRET))
+		     && (inputs.decoded_instr.imm.Imm12_I == f12_SRET))
 	       begin
 		  alu_outputs.control = CONTROL_SRET;
 	       end
@@ -1112,7 +1112,7 @@ function ALU_Outputs fv_SYSTEM (ALU_Inputs inputs);
 	    /*
 	    // URET instruction (future: Piccolo does not support 'N' extension)
 	    else if (   (inputs.cur_priv >= u_Priv_Mode)
-		     && (inputs.decoded_instr.imm12_I == f12_URET))
+		     && (inputs.decoded_instr.imm.Imm12_I == f12_URET))
 	       begin
 		  alu_outputs.control = CONTROL_URET;
 	       end
@@ -1124,7 +1124,7 @@ function ALU_Outputs fv_SYSTEM (ALU_Inputs inputs);
 			     && (inputs.mstatus [mstatus_tw_bitpos] == 0))
 			 || (   (inputs.cur_priv == u_Priv_Mode)
 			     && (inputs.misa.n == 1)))
-		     && (inputs.decoded_instr.imm12_I == f12_WFI))
+		     && (inputs.decoded_instr.imm.Imm12_I == f12_WFI))
 	       begin
 		  alu_outputs.control = CONTROL_WFI;
 	       end
@@ -1324,11 +1324,11 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
    let funct10 = inputs.decoded_instr.funct10;
 
-   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm20_U, 12'b0}));
+   IntXL  iv     = extend (unpack ({ inputs.decoded_instr.imm.Imm20_U, 12'b0}));
    IntXL  pc_s   = unpack (inputs.pc);
 
-   IntXL  imm_i_s = extend (unpack (inputs.decoded_instr.imm12_I));
-   IntXL  imm_s_s = extend (unpack (inputs.decoded_instr.imm12_S));
+   IntXL  imm_i_s = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
+   IntXL  imm_s_s = extend (unpack (inputs.decoded_instr.imm.Imm12_S));
 
    Bit #(32) rs1_val_b32 = rs1_val [31:0];
    Bit #(32) rs2_val_b32 = rs2_val [31:0];
@@ -1339,7 +1339,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
    Bit #(TLog #(XLEN)) shamt = (  (inputs.decoded_instr.opcode == op_OP_IMM)
                                || (inputs.decoded_instr.opcode == op_OP_IMM_32))
-				   ? truncate (inputs.decoded_instr.imm12_I)
+				   ? truncate (inputs.decoded_instr.imm.Imm12_I)
 				   : truncate (rs2_val);
    Bool shamt5_is_0 = shamt < 32;
    Bool shift_left = (?);
@@ -1354,7 +1354,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    // get the operands for addition
    //
    if (inputs.decoded_instr.opcode == op_BRANCH) begin
-      IntXL offset = extend (unpack (inputs.decoded_instr.imm13_SB));
+      IntXL offset = extend (unpack (inputs.decoded_instr.imm.Imm13_SB));
       //Addr  branch_target = pack (unpack (inputs.pc) + offset);
       addop1 = {unpack(inputs.pc), 1'b0};
       addop2 = {pack(offset), 1'b0};
@@ -1376,14 +1376,14 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
    end
 
    else if (inputs.decoded_instr.opcode == op_JAL) begin
-      IntXL offset = extend (unpack (inputs.decoded_instr.imm21_UJ));
+      IntXL offset = extend (unpack (inputs.decoded_instr.imm.Imm21_UJ));
       //Addr  next_pc = pack (s_rs1_val + offset);
       addop1 = {unpack(inputs.pc), 1'b0};
       addop2 = {pack(offset), 1'b0};
    end
 
    else if (inputs.decoded_instr.opcode == op_JALR) begin
-      IntXL offset    = extend (unpack (inputs.decoded_instr.imm12_I));
+      IntXL offset    = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
       //Addr  next_pc   = pack (s_rs1_val + offset);
       addop1 = {pack(s_rs1_val), 1'b0};
       addop2 = {pack(offset), 1'b0};
@@ -1409,7 +1409,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
             shiftop = extend(rs1_val);
          end
       end
-      trap = ((rv_version == RV32) && (inputs.decoded_instr.imm12_I [5] == 1));
+      trap = ((rv_version == RV32) && (inputs.decoded_instr.imm.Imm12_I [5] == 1));
    end
 
    else if (   (inputs.decoded_instr.opcode == op_OP_IMM)
@@ -1418,7 +1418,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       WordXL rs2_val_local   = rs2_val;
 
       if (inputs.decoded_instr.opcode == op_OP_IMM) begin
-         s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+         s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
          rs2_val_local   = pack (s_rs2_val_local);
       end
 
@@ -1453,7 +1453,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 `ifdef RV64
    else if (inputs.decoded_instr.opcode == op_OP_IMM_32) begin
       if (funct3 == f3_ADDIW) begin
-         IntXL  s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+         IntXL  s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
          //IntXL  sum       = s_rs1_val + s_rs2_val_local;
          addop1 = {pack(s_rs1_val), 1'b0};
          addop2 = {pack(s_rs2_val_local), 1'b0};
@@ -1772,7 +1772,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       WordXL rs2_val_local   = rs2_val;
 
       if (inputs.decoded_instr.opcode == op_OP_IMM) begin
-         s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm12_I));
+         s_rs2_val_local = extend (unpack (inputs.decoded_instr.imm.Imm12_I));
          rs2_val_local   = pack (s_rs2_val_local);
       end
 
@@ -1877,7 +1877,7 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 `endif
 
    else if (inputs.decoded_instr.opcode == op_LUI) begin
-      Bit #(32)  v32    = { inputs.decoded_instr.imm20_U, 12'h0 };
+      Bit #(32)  v32    = { inputs.decoded_instr.imm.Imm20_U, 12'h0 };
       IntXL      iv_local     = extend (unpack (v32));
       let        rd_val = pack (iv_local);
 
