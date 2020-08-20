@@ -19,6 +19,7 @@ import FIFOF        :: *;
 import GetPut       :: *;
 import ClientServer :: *;
 import ConfigReg    :: *;
+import DReg         :: *;
 
 // ----------------
 // BSV additional libs
@@ -57,6 +58,11 @@ interface CPU_StageD_IFC;
 
    (* always_ready *)
    method Action set_full (Bool full);
+
+`ifdef NEW_PIPE_LOGIC
+   (* always_ready *)
+   method Action invalidate (Bool invalid);
+`endif
 endinterface
 
 // ================================================================
@@ -67,6 +73,10 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
 
    FIFOF #(Token)  f_reset_reqs <- mkFIFOF;
    FIFOF #(Token)  f_reset_rsps <- mkFIFOF;
+
+`ifdef NEW_PIPE_LOGIC
+   FIFOF #(void)                   f_invalidated <- mkUGFIFOF1;
+`endif
 
    Reg #(Bool)                   rg_full <- mkReg (False);
    Reg #(Data_StageF_to_StageD)  rg_data <- mkRegU;
@@ -111,9 +121,17 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
       // This stage is empty
       if (! rg_full) begin
 	 output_stageD.ostatus = OSTATUS_EMPTY;
-      end
-      else begin
-	 output_stageD.ostatus        = OSTATUS_PIPE;
+      end else begin
+`ifdef NEW_PIPE_LOGIC
+         if (f_invalidated.notEmpty || rg_data.invalid) begin
+         //if (rg_data.invalid) begin
+	    output_stageD.ostatus     = OSTATUS_NOP;
+         end else begin
+            output_stageD.ostatus     = OSTATUS_PIPE;
+         end
+`else
+         output_stageD.ostatus = OSTATUS_PIPE;
+`endif
 	 output_stageD.data_to_stage1 = Data_StageD_to_Stage1 {pc:             rg_data.pc,
 `ifdef RVFI_DII
 							       instr_seq: rg_data.instr_seq,
@@ -127,6 +145,10 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
 							       instr:          instr,
 `ifdef ISA_C
 							       instr_C:        instr_C,
+`endif
+`ifdef NEW_PIPE_LOGIC
+                                                               invalid:        rg_data.invalid || f_invalidated.notEmpty,
+                                                               //invalid:        rg_data.invalid,
 `endif
 							       pred_pc:        rg_data.pred_pc,
 							       decoded_instr:  decoded_instr};
@@ -153,6 +175,11 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
    // ---- Input
    method Action enq (Data_StageF_to_StageD  data);
       rg_data <= data;
+`ifdef NEW_PIPE_LOGIC
+      if (f_invalidated.notEmpty) begin
+         f_invalidated.deq;
+      end
+`endif
       if (verbosity > 1)
 	 $display ("    CPU_StageD.enq (Data_StageF_to_StageD)");
    endmethod
@@ -160,6 +187,12 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
    method Action set_full (Bool full);
       rg_full <= full;
    endmethod
+
+`ifdef NEW_PIPE_LOGIC
+   method Action invalidate (Bool invalid);
+      f_invalidated.enq (?);
+   endmethod
+`endif
 endmodule
 
 // ================================================================

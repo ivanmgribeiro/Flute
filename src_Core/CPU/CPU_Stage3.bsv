@@ -47,6 +47,10 @@ import CPU_Globals :: *;
 import TV_Info     :: *;
 `endif
 
+`ifdef NEW_REG
+import Forwarding_RegFile :: *;
+`endif
+
 import CPU_Stage3_syn :: *;
 
 // ================================================================
@@ -84,7 +88,11 @@ module mkRegUSynth_2to3 (Reg#(Data_Stage2_to_Stage3));
 endmodule
 
 module mkCPU_Stage3 #(Bit #(4)         verbosity,
+`ifdef NEW_REG
+                      ForwardingPipelinedRegFileIFC #(Word, RegName, 4) gpr_regfile,
+`else
 		      GPR_RegFile_IFC  gpr_regfile,
+`endif
 `ifdef ISA_F
 		      FPR_RegFile_IFC  fpr_regfile,
 `endif
@@ -122,6 +130,15 @@ module mkCPU_Stage3 #(Bit #(4)         verbosity,
    function Action fa_deq;
       action
 	 // Writeback Rd if valid
+         $display("S3 fa_deq called");
+`ifdef NEW_PIPE_LOGIC
+         if (rg_stage3.invalid) begin
+            gpr_regfile.writeReg (?, False);
+            if (verbosity > 1) begin
+               $display("pipelined regfile write nop: instr 0x%0h, pc 0x%0h", rg_stage3.instr, rg_stage3.pc);
+            end
+         end else
+`endif
 	 if (rg_stage3.rd_valid) begin
 `ifdef ISA_F
             // Write to FPR
@@ -130,10 +147,21 @@ module mkCPU_Stage3 #(Bit #(4)         verbosity,
 
             else
                // Write to GPR
+`ifdef NEW_REG
+               //gpr_regfile.writeReg (rg_stage3.rd_val, True);
+`else
                gpr_regfile.write_rd (rg_stage3.rd, rg_stage3.rd_val);
+`endif
 `else
             // Write to GPR in a non-FD system
+`ifdef NEW_REG
+            $display(" pipelined regfile write: instr 0x%0h, value 0x%0h", rg_stage3.instr, rg_stage3.rd_val);
+            if (rg_full && gpr_regfile.canWrite) begin
+               gpr_regfile.writeReg (rg_stage3.rd_val, True);
+            end
+`else
             gpr_regfile.write_rd (rg_stage3.rd, rg_stage3.rd_val);
+`endif
 `endif
 
 	    if (verbosity > 1)
@@ -155,7 +183,15 @@ module mkCPU_Stage3 #(Bit #(4)         verbosity,
             if (rg_stage3.upd_flags || rg_stage3.rd_in_fpr)
                csr_regfile.ma_update_mstatus_fs (fs_xs_dirty);
 `endif
-	 end
+         end
+`ifdef NEW_PIPE_LOGIC
+	 else if (!rg_stage3.rd_valid) begin
+            gpr_regfile.writeReg (?, False);
+            if (verbosity > 1) begin
+               $display(" pipelined regfile write None: instr 0x%0h, pc 0x%0h", rg_stage3.instr, rg_stage3.pc);
+            end
+         end
+`endif
       endaction
    endfunction
 

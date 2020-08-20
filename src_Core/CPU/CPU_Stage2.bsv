@@ -34,6 +34,7 @@ import FIFOF        :: *;
 import GetPut       :: *;
 import ClientServer :: *;
 import ConfigReg    :: *;
+import DReg         :: *;
 
 // ----------------
 // BSV additional libs
@@ -96,6 +97,11 @@ interface CPU_Stage2_IFC;
 
    (* always_ready *)
    method Action set_full (Bool full);
+
+`ifdef NEW_PIPE_LOGIC
+   (* always_ready *)
+   method Action invalidate (Bool invalid);
+`endif
 endinterface
 
 // ================================================================
@@ -119,6 +125,10 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
    Reg #(Bool)                  rg_resetting  <- mkReg (False);
    Reg #(Bool)                  rg_full       <- mkReg (False);
    Reg #(Data_Stage1_to_Stage2) rg_stage2     <- mkRegUSynth_1to2;    // From Stage 1
+
+`ifdef NEW_PIPE_LOGIC
+   FIFOF #(Bool)                  f_invalidated <- mkUGFIFOF1;
+`endif
 
    // ----------------
    // Serial shifter box
@@ -185,6 +195,9 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
    let stage2_wrapper <- mkCPU_Stage2_syn;
    rule assign_wrapper_inputs;
       stage2_wrapper.put_inputs(rg_full,
+`ifdef NEW_PIPE_LOGIC
+                                f_invalidated.notEmpty,
+`endif
                                 rg_stage2,
                                 dcache.valid,
                                 dcache.exc,
@@ -215,6 +228,12 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 `else
 	 Bool op_stage2_amo = False;
 	 Bit #(7) amo_funct7 = 0;
+`endif
+`ifdef NEW_PIPE_LOGIC
+         // TODO there's probably a better way of expressing this
+         if (x.invalid || f_invalidated.notEmpty) begin
+            noAction;
+         end else
 `endif
 	 if ((x.op_stage2 == OP_Stage2_LD) || (x.op_stage2 == OP_Stage2_ST) || op_stage2_amo) begin
 	    WordXL   mstatus     = csr_regfile.read_mstatus;
@@ -251,6 +270,7 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
             Bit# (64) wdata_from_fpr = zeroExtend (x.fval2);
 `endif
 `endif
+            //$display("memory request in stage2 fa_enq to 0x%0h", x.addr);
 	    dcache.req (cache_op,
 			instr_funct3 (x.instr),
 `ifdef ISA_A
@@ -317,7 +337,13 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
    endmethod
 
    method Action deq ();
+`ifdef NEW_PIPE_LOGIC
+      if (f_invalidated.notEmpty) begin
+         f_invalidated.deq;
+      end
+`else
       noAction;
+`endif
    endmethod
 
    // ---- Input
@@ -331,6 +357,12 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
    method Action set_full (Bool full);
       rg_full <= full;
    endmethod
+
+`ifdef NEW_PIPE_LOGIC
+   method Action invalidate (Bool invalid);
+      f_invalidated.enq (?);
+   endmethod
+`endif
 endmodule
 
 // ================================================================

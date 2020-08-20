@@ -15,6 +15,9 @@ interface CPU_Stage1_syn_IFC;
 
    (* always_ready *)
    method Action put_inputs(Bool rg_full_in,
+`ifdef NEW_PIPE_LOGIC
+                            Bool rg_invalidated_in,
+`endif
                             Data_StageD_to_Stage1 rg_stage_input_in,
                             Epoch cur_epoch_in,
                             Bool rs1_busy_in,
@@ -46,6 +49,9 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 `endif
    Wire#(Priv_Mode) cur_priv <- mkDWire(?);
    Wire#(Bool) rg_full <- mkDWire (?);
+`ifdef NEW_PIPE_LOGIC
+   Wire#(Bool) rg_invalidated <- mkDWire (?);
+`endif
    Wire#(ALU_Outputs) alu_outputs <- mkDWire (?);
 
    Wire#(Output_Stage1) outputs <- mkDWire (?);
@@ -90,6 +96,9 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 
    let data_to_stage2 = Data_Stage1_to_Stage2 {pc            : rg_stage_input.pc,
 					       instr         : rg_stage_input.instr,
+`ifdef NEW_PIPE_LOGIC
+                                               invalid       : rg_stage_input.invalid || rg_invalidated,
+`endif
 `ifdef RVFI_DII
                                                instr_seq     : rg_stage_input.instr_seq,
 `endif
@@ -128,14 +137,35 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 	 output_stage1.ostatus = OSTATUS_EMPTY;
       end
 
+      // Stall if bypass pending for GPR rs1 or rs2
+      else if (rs1_busy || rs2_busy) begin
+	 output_stage1.ostatus = OSTATUS_BUSY;
+      end
+
+`ifdef ISA_F
+      // Stall if bypass pending for FPR rs1, rs2 or rs3
+      else if (frs1_busy || frs2_busy || frs3_busy) begin
+	 output_stage1.ostatus = OSTATUS_BUSY;
+      end
+`endif
+
       // Wrong branch-prediction epoch: discard instruction (convert into a NOOP)
       else if (rg_stage_input.epoch != cur_epoch) begin
-	 output_stage1.ostatus = OSTATUS_PIPE;
+         // TODO review this...
+`ifdef NEW_PIPE_LOGIC
+	 output_stage1.ostatus = OSTATUS_NOP;
+	 //output_stage1.control = CONTROL_DISCARD;
+`else
+         output_stage1.ostatus = OSTATUS_PIPE;
 	 output_stage1.control = CONTROL_DISCARD;
+`endif
 
 	 // For debugging only
 	 let data_to_stage2 = Data_Stage1_to_Stage2 {pc:        rg_stage_input.pc,
 						     instr:     rg_stage_input.instr,
+`ifdef NEW_PIPE_LOGIC
+                                                     invalid:   rg_stage_input.invalid || rg_invalidated,
+`endif
 `ifdef RVFI_DII
                                                      instr_seq: rg_stage_input.instr_seq,
 `endif
@@ -165,20 +195,18 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 	 output_stage1.data_to_stage2 = data_to_stage2;
       end
 
-      // Stall if bypass pending for GPR rs1 or rs2
-      else if (rs1_busy || rs2_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
+      //else if (rg_stage_input.invalid || rg_invalidated) begin
+      //   output_stage1.ostatus = OSTATUS_NOP;
+      //   output_stage1.data_to_stage2 = data_to_stage2;
+      //end
 
-`ifdef ISA_F
-      // Stall if bypass pending for FPR rs1, rs2 or rs3
-      else if (frs1_busy || frs2_busy || frs3_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
+      // Trap on fetch-exception which is not invalidated
+      else if (rg_stage_input.exc
+`ifdef NEW_PIPE_LOGIC
+               && !(rg_stage_input.invalid || rg_invalidated)
+               //&& !(rg_stage_input.invalid)
 `endif
-
-      // Trap on fetch-exception
-      else if (rg_stage_input.exc) begin
+      ) begin
 	 output_stage1.ostatus   = OSTATUS_NONPIPE;
 	 output_stage1.control   = CONTROL_TRAP;
 	 output_stage1.trap_info = Trap_Info {epc:      rg_stage_input.pc,
@@ -190,10 +218,20 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
       // ALU outputs: pipe (straight/branch)
       // and non-pipe (CSRR_W, CSRR_S_or_C, FENCE.I, FENCE, SFENCE_VMA, xRET, WFI, TRAP)
       else begin
-	 let ostatus = (  (   (alu_outputs.control == CONTROL_STRAIGHT)
-			   || (alu_outputs.control == CONTROL_BRANCH))
-			? OSTATUS_PIPE
-			: OSTATUS_NONPIPE);
+         let ostatus = 
+`ifdef NEW_PIPE_LOGIC
+                       (rg_stage_input.invalid || rg_invalidated)
+                       //(rg_stage_input.invalid)
+                       ? OSTATUS_NOP :
+`endif
+                         (alu_outputs.control == CONTROL_STRAIGHT ||
+                          alu_outputs.control == CONTROL_BRANCH)
+                         ? OSTATUS_PIPE
+                         : OSTATUS_NONPIPE;
+//	 let ostatus = (  (   (alu_outputs.control == CONTROL_STRAIGHT)
+//			   || (alu_outputs.control == CONTROL_BRANCH))
+//			? OSTATUS_PIPE
+//			: OSTATUS_NONPIPE);
 
 	 // Compute MTVAL in case of traps
 	 let tval = 0;
@@ -219,7 +257,13 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
          // if we are not using branch prediction, then we can remove this comparison, since
          // next_pc is calculated in precisely the same way as pred_pc
 	 // let redirect = (next_pc != rg_stage_input.pred_pc);
+`ifdef NEW_PIPE_LOGIC
+         let redirect = alu_outputs.control == CONTROL_BRANCH
+                        && !rg_stage_input.invalid
+                        && !rg_invalidated;
+`else
          let redirect = alu_outputs.control == CONTROL_BRANCH;
+`endif
 
 	 output_stage1.ostatus        = ostatus;
 	 output_stage1.control        = alu_outputs.control;
@@ -242,6 +286,9 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 
 
    method Action put_inputs(Bool rg_full_in,
+`ifdef NEW_PIPE_LOGIC
+                            Bool rg_invalidated_in,
+`endif
                             Data_StageD_to_Stage1 rg_stage_input_in,
                             Epoch cur_epoch_in,
                             Bool rs1_busy_in,
@@ -256,7 +303,11 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
                             ALU_Outputs alu_outputs_in,
                             Priv_Mode cur_priv_in);
 
+   //$display("rg_full is ", fshow(rg_full_in), " for instruction ", fshow(rg_stage_input_in));
    rg_full <= rg_full_in;
+`ifdef NEW_PIPE_LOGIC
+   rg_invalidated <= rg_invalidated_in;
+`endif
    rg_stage_input <= rg_stage_input_in;
    cur_epoch <= cur_epoch_in;
    rs1_busy <= rs1_busy_in;

@@ -33,6 +33,12 @@ import TV_Info   :: *;
 //                (such as traps, CSR access, ...)
 
 typedef enum {OSTATUS_EMPTY,
+`ifdef NEW_PIPE_LOGIC
+              OSTATUS_NOP, // the instruction in this stage has been invalidated
+                           // ie by a redirect or something else
+                           // however, it still needs to be propagated through the
+                           // pipeline
+`endif
 	      OSTATUS_BUSY,
 	      OSTATUS_PIPE,
 	      OSTATUS_NONPIPE
@@ -224,6 +230,10 @@ instance FShow #(Output_StageF);
       Fmt fmt = $format ("Output_StageF");
       if (x.ostatus == OSTATUS_EMPTY)
 	 fmt = fmt + $format (" EMPTY");
+`ifdef NEW_PIPE_LOGIC
+      else if (x.ostatus == OSTATUS_NOP)
+         fmt = fmt + $format (" NOP: ", fshow (x.data_to_stageD));
+`endif
       else if (x.ostatus == OSTATUS_BUSY)
 	 fmt = fmt + $format (" BUSY: pc:%h", x.data_to_stageD.pc);
       else if (x.ostatus == OSTATUS_NONPIPE)
@@ -248,6 +258,9 @@ typedef struct {
    Exc_Code   exc_code;
    WordXL     tval;               // Trap value; can be different from PC, with 'C' extension
    Instr      instr;              // Valid if no exception
+`ifdef NEW_PIPE_LOGIC
+   Bool       invalid;
+`endif
    WordXL     pred_pc;            // Predicted next pc
    } Data_StageF_to_StageD
 deriving (Bits);
@@ -281,6 +294,10 @@ instance FShow #(Output_StageD);
       Fmt fmt = $format ("Output_StageD");
       if (x.ostatus == OSTATUS_EMPTY)
 	 fmt = fmt + $format (" EMPTY");
+`ifdef NEW_PIPE_LOGIC
+      else if (x.ostatus == OSTATUS_NOP)
+         fmt = fmt + $format (" NOP: ", fshow (x.data_to_stage1));
+`endif
       else if (x.ostatus == OSTATUS_BUSY)
 	 fmt = fmt + $format (" BUSY: pc:%h", x.data_to_stage1.pc);
       else if (x.ostatus == OSTATUS_NONPIPE)
@@ -310,6 +327,9 @@ typedef struct {
 
    Instr          instr;              // Valid if no exception
    Instr_C        instr_C;            // Valid if no exception; original compressed instruction
+`ifdef NEW_PIPE_LOGIC
+   Bool           invalid;
+`endif
    WordXL         pred_pc;            // Predicted next pc
    Decoded_Instr  decoded_instr;
    } Data_StageD_to_Stage1
@@ -355,11 +375,14 @@ typedef struct {
 
    Control                control;
 
+   // EPC can be rmeoved from here
    Trap_Info              trap_info;
 
    // feedback
    Bool                   redirect;
+   // is this necessary? not sure....
    WordXL                 next_pc;
+   // this seems (from above) to only be used for branch prediction updates
    CF_Info                cf_info;
 
    // feedforward data
@@ -372,6 +395,10 @@ instance FShow #(Output_Stage1);
       Fmt fmt = $format ("Output_Stage1");
       if (x.ostatus == OSTATUS_EMPTY)
 	 fmt = fmt + $format (" EMPTY");
+`ifdef NEW_PIPE_LOGIC
+      else if (x.ostatus == OSTATUS_NOP)
+         fmt = fmt + $format (" NOP: ", fshow (x.data_to_stage2));
+`endif
       else if (x.ostatus == OSTATUS_BUSY)
 	 fmt = fmt + $format (" BUSY pc:%h", x.data_to_stage2.pc);
       else begin
@@ -428,6 +455,9 @@ typedef struct {
    Addr       pc;
    Instr      instr;             // For debugging. Just funct3, funct7 are
                                  // enough for functionality.
+`ifdef NEW_PIPE_LOGIC
+   Bool       invalid;
+`endif
 `ifdef RVFI_DII
    Dii_Id instr_seq;
 `endif
@@ -526,6 +556,10 @@ instance FShow #(Output_Stage2);
       Fmt fmt = $format ("Output_Stage2");
       if (x.ostatus == OSTATUS_EMPTY)
 	 fmt = fmt + $format (" EMPTY");
+`ifdef NEW_PIPE_LOGIC
+      else if (x.ostatus == OSTATUS_NOP)
+         fmt = fmt + $format (" NOP: ", fshow (x.data_to_stage3));
+`endif
       else if (x.ostatus == OSTATUS_BUSY)
 	 fmt = fmt + $format (" BUSY: pc:%0h", x.data_to_stage3.pc);
       else if (x.ostatus == OSTATUS_NONPIPE) begin
@@ -544,6 +578,9 @@ endinstance
 typedef struct {
    Addr      pc;            // For debugging only
    Instr     instr;         // For debugging only
+`ifdef NEW_PIPE_LOGIC
+   Bool      invalid;
+`endif
 `ifdef RVFI_DII
    Dii_Id instr_seq;
 `endif
@@ -621,6 +658,10 @@ instance FShow #(Output_Stage3);
       Fmt fmt = $format ("Output_Stage3");
       if (x.ostatus == OSTATUS_EMPTY)
 	 fmt = fmt + $format (" EMPTY");
+`ifdef NEW_PIPE_LOGIC
+      else if (x.ostatus == OSTATUS_NOP)
+         fmt = fmt + $format (" NOP");
+`endif
       else if (x.ostatus == OSTATUS_BUSY)
 	 fmt = fmt + $format (" BUSY");
       else if (x.ostatus == OSTATUS_PIPE)

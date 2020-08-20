@@ -19,6 +19,9 @@ interface CPU_Stage2_syn_IFC;
 
    (* always_ready *)
    method Action put_inputs(Bool rg_full_in,
+`ifdef NEW_PIPE_LOGIC
+                            Bool rg_invalidated_in,
+`endif
                             Data_Stage1_to_Stage2 rg_stage2_in,
                             Bool dcache_valid_in,
                             Bool dcache_exc_in,
@@ -35,6 +38,9 @@ endinterface
 (* synthesize *)
 module mkCPU_Stage2_syn (CPU_Stage2_syn_IFC);
    Wire#(Bool) rg_full <- mkDWire (?);
+`ifdef NEW_PIPE_LOGIC
+   Wire#(Bool) rg_invalidated <- mkDWire (?);
+`endif
    Wire#(Data_Stage1_to_Stage2) rg_stage2 <- mkDWire (?);
    Wire#(Bool) dcache_valid <- mkDWire (?);
    Wire#(Bool) dcache_exc <- mkDWire (?);
@@ -73,6 +79,9 @@ module mkCPU_Stage2_syn (CPU_Stage2_syn_IFC);
    let data_to_stage3_base = Data_Stage2_to_Stage3 {priv:       rg_stage2.priv,
 						    pc:         rg_stage2.pc,
 						    instr:      rg_stage2.instr,
+`ifdef NEW_PIPE_LOGIC
+                                                    invalid:    rg_stage2.invalid || rg_invalidated,
+`endif
 `ifdef RVFI_DII
                                                     instr_seq:  rg_stage2.instr_seq,
 `endif
@@ -124,6 +133,22 @@ module mkCPU_Stage2_syn (CPU_Stage2_syn_IFC);
 `endif
 					};
       end
+
+`ifdef NEW_PIPE_LOGIC
+      else if (rg_stage2.invalid || rg_invalidated) begin
+         let data_to_stage3 = data_to_stage3_base;
+         data_to_stage3.rd_valid = False;
+
+         output_stage2 = Output_Stage2 {ostatus         : OSTATUS_NOP,
+                                        trap_info       : ?,
+                                        data_to_stage3  : data_to_stage3,
+                                        bypass          : no_bypass
+`ifdef ISA_F
+					, fbypass       : no_fbypass
+`endif
+                                       };
+      end
+`endif
 
       // This stage is just relaying ALU results from previous stage to next stage
       else if (rg_stage2.op_stage2 == OP_Stage2_ALU) begin
@@ -469,6 +494,9 @@ module mkCPU_Stage2_syn (CPU_Stage2_syn_IFC);
 
 
    method Action put_inputs(Bool rg_full_in,
+`ifdef NEW_PIPE_LOGIC
+                            Bool rg_invalidated_in,
+`endif
                             Data_Stage1_to_Stage2 rg_stage2_in,
                             Bool dcache_valid_in,
                             Bool dcache_exc_in,
@@ -480,6 +508,9 @@ module mkCPU_Stage2_syn (CPU_Stage2_syn_IFC);
 `endif
                             );
       rg_full <= rg_full_in;
+`ifdef NEW_PIPE_LOGIC
+      rg_invalidated <= rg_invalidated_in;
+`endif
       rg_stage2 <= rg_stage2_in;
       dcache_valid <= dcache_valid_in;
       dcache_exc <= dcache_exc_in;

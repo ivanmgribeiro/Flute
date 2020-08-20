@@ -59,7 +59,11 @@ import CPU_Fetch_C  :: *;
 `endif
 `endif
 
+`ifdef NEW_REG
+import Forwarding_RegFile :: *;
+`else
 import GPR_RegFile :: *;
+`endif
 `ifdef ISA_F
 import FPR_RegFile :: *;
 `endif
@@ -170,7 +174,12 @@ module mkCPU (CPU_IFC);
 
    // ----------------
    // General purpose registers and CSRs
+`ifdef NEW_REG
+   ForwardingPipelinedRegFileIFC #(Word, RegName, 4) gpr_regfile
+      <- mkForwardingPipelinedRegFile (0);
+`else
    GPR_RegFile_IFC  gpr_regfile  <- mkGPR_RegFile;
+`endif
 `ifdef ISA_F
    FPR_RegFile_IFC  fpr_regfile  <- mkFPR_RegFile;
 `endif
@@ -280,7 +289,12 @@ module mkCPU (CPU_IFC);
 
    CPU_StageD_IFC  stageD <- mkCPU_StageD (cur_verbosity, misa);
 
-   CPU_StageF_IFC  stageF <- mkCPU_StageF (cur_verbosity, imem);
+   CPU_StageF_IFC  stageF <- mkCPU_StageF (cur_verbosity,
+`ifdef NEW_REG
+                                           gpr_regfile,
+                                           misa,
+`endif
+                                           imem);
 
    // ----------------
    // Interrupt pending based on current priv, mstatus.ie, mie and mip registers
@@ -495,8 +509,8 @@ module mkCPU (CPU_IFC);
    Reg #(Bool) rg_run_on_reset <- mkReg (False);
 
    rule rl_reset_start (rg_state == CPU_RESET1);
-      let run_on_reset <- pop (f_reset_reqs);
-      rg_run_on_reset <= run_on_reset;
+      //let run_on_reset <- pop (f_reset_reqs);
+      rg_run_on_reset <= True;
 
 `ifndef RVFI_DII
       $display ("================================================================");
@@ -509,7 +523,13 @@ module mkCPU (CPU_IFC);
       $display ("================================================================");
 `endif
 
+`ifdef NEW_REG
+      // reset all registers
+      gpr_regfile.clearRegs(32'hffff_ffff);
       gpr_regfile.server_reset.request.put (?);
+`else
+      gpr_regfile.server_reset.request.put (?);
+`endif
 `ifdef ISA_F
       fpr_regfile.server_reset.request.put (?);
 `endif
@@ -552,7 +572,11 @@ module mkCPU (CPU_IFC);
 `endif
 
    rule rl_reset_complete (rg_state == CPU_RESET2);
+`ifdef NEW_REG
       let ack_gpr <- gpr_regfile.server_reset.response.get;
+`else
+      let ack_gpr <- gpr_regfile.server_reset.response.get;
+`endif
 `ifdef ISA_F
       let ack_fpr <- fpr_regfile.server_reset.response.get;
 `endif
@@ -720,6 +744,44 @@ module mkCPU (CPU_IFC);
 `endif
 `endif
 
+
+   
+   (* fire_when_enabled *)
+   rule rl_pipe_debug (cur_verbosity > 1);
+      $display("IMP CONDITIONS START @@@@@@@@@@@@@@@");
+      $display("cycle: %0d", mcycle);
+      $display("rg_state: ", fshow(rg_state));
+      $display("!pipe_is_empty: ", fshow(!pipe_is_empty));
+      $display("!pipe_has_nonpipe: ", fshow(!pipe_has_nonpipe));
+      $display("!stage1_halted: ", fshow(!stage1_halted));
+      $display("stageF.deq: ", fshow(impCondOf(stageF.deq)));
+      $display("stageD.deq: ", fshow(impCondOf(stageD.deq)));
+      $display("stage1.deq: ", fshow(impCondOf(stage1.deq)));
+      $display("stage2.deq: ", fshow(impCondOf(stage2.deq)));
+      $display("stage3.deq: ", fshow(impCondOf(stage3.deq)));
+      $display("stageF.enq: ", fshow(impCondOf(stageF.enq)));
+      $display("stageD.enq: ", fshow(impCondOf(stageD.enq)));
+      $display("stage1.enq: ", fshow(impCondOf(stage1.enq)));
+      $display("stage2.enq: ", fshow(impCondOf(stage2.enq)));
+      $display("stage3.enq: ", fshow(impCondOf(stage3.enq)));
+`ifdef NEW_REG
+      $display("gpr_regfile.writeReg: ", fshow(impCondOf(gpr_regfile.writeReg)));
+`endif
+      $display("IMP CONDITIONS END ###############");
+      Bool stage3_full = (stage3.out.ostatus != OSTATUS_EMPTY);
+      Bool stage2_full = (stage2.out.ostatus != OSTATUS_EMPTY);
+      Bool stage1_full = (stage1.out.ostatus != OSTATUS_EMPTY);
+      Bool stageD_full = (stageD.out.ostatus != OSTATUS_EMPTY);
+      Bool stageF_full = (stageF.out.ostatus != OSTATUS_EMPTY);
+      $display("stageF full: ", fshow(stageF_full));
+      $display("stageD full: ", fshow(stageD_full));
+      $display("stage1 full: ", fshow(stage1_full));
+      $display("stage1 redirect: ", fshow(stage1.out.redirect));
+      $display("stage2 full: ", fshow(stage2_full));
+      $display("stage3 full: ", fshow(stage3_full));
+   endrule
+
+
    rule rl_pipe (   (rg_state == CPU_RUNNING)
 		 && (! pipe_is_empty)
 		 && (! pipe_has_nonpipe)
@@ -737,7 +799,11 @@ module mkCPU (CPU_IFC);
       // ----------------
       // Stage3 sink (does regfile writebacks)
 
-      if (stage3.out.ostatus == OSTATUS_PIPE) begin
+      if (stage3.out.ostatus == OSTATUS_PIPE
+`ifdef NEW_PIPE_LOGIC
+         || stage3.out.ostatus == OSTATUS_NOP
+`endif
+         ) begin
 	 stage3.deq; stage3_full = False;
 
 `ifdef INCLUDE_TANDEM_VERIF
@@ -750,7 +816,13 @@ module mkCPU (CPU_IFC);
       // ----------------
       // Move instruction from Stage2 to Stage3
 
-      if ((! stage3_full) && (stage2.out.ostatus == OSTATUS_PIPE)) begin
+      if ((! stage3_full)
+`ifdef NEW_PIPE_LOGIC
+         && (stage2.out.ostatus == OSTATUS_PIPE || stage2.out.ostatus == OSTATUS_NOP)
+`else
+         && (stage2.out.ostatus == OSTATUS_PIPE)
+`endif
+         ) begin
 	 stage3.enq (stage2.out.data_to_stage3);  stage3_full = True;
 	 stage2.deq;                              stage2_full = False;
 
@@ -761,9 +833,15 @@ module mkCPU (CPU_IFC);
 					      False,
 					      0,
 					      rg_handler,rg_donehalt);
-	 rg_donehalt <= outpacket.rvfi_halt;
-	 f_to_verifier.enq(outpacket);
-	 rg_handler <= False;
+`ifdef NEW_PIPE_LOGIC
+         if (stage2.out.ostatus == OSTATUS_PIPE) begin
+`endif
+	    rg_donehalt <= outpacket.rvfi_halt;
+	    f_to_verifier.enq(outpacket);
+	    rg_handler <= False;
+`ifdef NEW_PIPE_LOGIC
+         end
+`endif
 `endif
 
 	 // Increment csr_INSTRET.
@@ -780,8 +858,12 @@ module mkCPU (CPU_IFC);
 
       if (   (! halting)
 	  && (! stage2_full)
-	  && (stage1.out.ostatus == OSTATUS_PIPE))
-	 begin
+`ifdef NEW_PIPE_LOGIC
+	  && (stage1.out.ostatus == OSTATUS_PIPE || stage1.out.ostatus == OSTATUS_NOP)
+`else
+	  && (stage1.out.ostatus == OSTATUS_PIPE)
+`endif
+	 ) begin
 	    if (stage1.out.control == CONTROL_DISCARD) begin
 	       stage2_full = False;
 	       stage1_full = False;
@@ -798,6 +880,13 @@ module mkCPU (CPU_IFC);
 		     rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
 `endif
 		  redirect    = True;
+
+`ifdef NEW_PIPE_LOGIC
+                  // stages F and D have incorrectly speculated instructions
+                  stage1.invalidate (True);
+                  stageD.invalidate (True);
+                  //stageF.invalidate (True);
+`endif
 	       end
 	    end
 	 end
@@ -805,8 +894,12 @@ module mkCPU (CPU_IFC);
       // ----------------
       // Move instruction from StageD to Stage1
       if (   (! stage1_full)
-	  && (stageD.out.ostatus == OSTATUS_PIPE))
-	 begin
+`ifdef NEW_PIPE_LOGIC
+	  && (stageD.out.ostatus == OSTATUS_PIPE || stageD.out.ostatus == OSTATUS_NOP)
+`else
+	  && (stageD.out.ostatus == OSTATUS_PIPE)
+`endif
+         ) begin
 	    stage1.enq (stageD.out.data_to_stage1);  stage1_full = True;
 	    stageD.deq;                              stageD_full = False;
 	 end
@@ -814,17 +907,33 @@ module mkCPU (CPU_IFC);
       // ----------------
       // Move instruction from StageF to StageD
       if (   (! stageD_full)
-	  && (stageF.out.ostatus == OSTATUS_PIPE))
-	 begin
+	  && (stageF.out.ostatus == OSTATUS_PIPE
+`ifdef NEW_PIPE_LOGIC
+              || stageF.out.ostatus == OSTATUS_NOP
+`endif
+         )) begin
+`ifdef NEW_PIPE_LOGIC
+            if (!redirect) begin
+	       stageD.enq (stageF.out.data_to_stageD);  stageD_full = True;
+	       stageF.deq;                              stageF_full = False;
+            end else begin
+               stageF_full = False;
+            end
+`else
 	    stageD.enq (stageF.out.data_to_stageD);  stageD_full = True;
 	    stageF.deq;                              stageF_full = False;
+`endif
 	 end
 
       // ----------------
       // Feed Stage F
       if (   (! stageF_full)
-	  && (stageF.out.ostatus == OSTATUS_PIPE))
-	 begin
+`ifdef NEW_PIPE_LOGIC
+	  && (stageF.out.ostatus == OSTATUS_PIPE || stageF.out.ostatus == OSTATUS_NOP)
+`else
+	  && (stageF.out.ostatus == OSTATUS_PIPE)
+`endif
+	 ) begin
 	    CF_Info cf_info = cf_info_none;
 	    if (   (stage1.out.ostatus == OSTATUS_PIPE)
 		&& (stage1.out.control != CONTROL_DISCARD))
@@ -852,6 +961,13 @@ module mkCPU (CPU_IFC);
 			     cf_info);
 	 end
 
+      if (cur_verbosity > 1) begin
+         $display ("setting stage3_full: ", fshow(stage3_full));
+         $display ("setting stage2_full: ", fshow(stage2_full));
+         $display ("setting stage1_full: ", fshow(stage1_full));
+         $display ("setting stageD_full: ", fshow(stageD_full));
+         $display ("setting stageF_full: ", fshow(stageF_full));
+      end
       stage3.set_full (stage3_full);
       stage2.set_full (stage2_full);
       stage1.set_full (stage1_full);    fa_step_check;
@@ -879,6 +995,13 @@ module mkCPU (CPU_IFC);
       rg_trap_trace_data <= stage2.out.data_to_stage3.trace_data;
 `elsif RVFI
       rg_trap_trace_data <= Right(stage2.out.data_to_stage3);
+`endif
+
+`ifdef NEW_PIPE_LOGIC
+      // instructions in stages D, 1 and 2 were incorrectly speculated
+      stage2.invalidate (True);
+      stage1.invalidate (True);
+      stageD.invalidate (True);
 `endif
 
       rg_state           <= CPU_TRAP;
@@ -915,6 +1038,12 @@ module mkCPU (CPU_IFC);
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;
 `elsif RVFI
       rg_trap_trace_data <= Left(stage1.out.data_to_stage2);
+`endif
+
+`ifdef NEW_PIPE_LOGIC
+      // instructions in stages D and 1 were incorrectly speculated
+      stage1.invalidate (True);
+      stageD.invalidate (True);
 `endif
 
       rg_state           <= CPU_TRAP;
@@ -954,9 +1083,11 @@ module mkCPU (CPU_IFC);
 
       rg_state <= CPU_START_TRAP_HANDLER;
 
+`ifndef NEW_PIPE_LOGIC
       stageD.set_full (False);
       stage1.set_full (False);    fa_step_check;
       stage2.set_full (False);
+`endif
 
       // Accounting    TODO: should traps be counted as retired insrs?
       // csr_regfile.csr_minstret_incr;
@@ -1052,6 +1183,11 @@ module mkCPU (CPU_IFC);
       rg_trap_trace_data <= Left(stage1.out.data_to_stage2);
 `endif
 
+`ifdef NEW_REG
+      // make sure the CSRR instruction in stage1 performs a speculative write
+      // to the register file
+      gpr_regfile.writeRegSpeculative(?, ?);
+`endif
       rg_state <= CPU_CSRRW_2;
    endrule: rl_stage1_CSRR_W
 
@@ -1076,6 +1212,10 @@ module mkCPU (CPU_IFC);
       if (! permitted) begin
 	 rg_state <= CPU_TRAP;
 
+`ifdef NEW_REG
+         gpr_regfile.writeReg (?, False);
+`endif
+
 	 // Debug
 	 if (cur_verbosity > 1) begin
 	    $display ("    Trap on CSR permissions: Rs1 %0d Rs1_val 0x%0h csr 0x%0h Rd %0d",
@@ -1095,7 +1235,11 @@ module mkCPU (CPU_IFC);
 
 	 // Writeback to GPR file
 	 let new_rd_val = csr_val;
+`ifdef NEW_REG
+         gpr_regfile.writeReg (new_rd_val, True);
+`else
 	 gpr_regfile.write_rd (rd, new_rd_val);
+`endif
 
 	 // Writeback to CSR file
 	 let csr_write_result <- csr_regfile.mav_csr_write (csr_addr, rs1_val);
@@ -1177,6 +1321,11 @@ module mkCPU (CPU_IFC);
       rg_trap_trace_data <= Left(stage1.out.data_to_stage2);
 `endif
 
+`ifdef NEW_REG
+      // make sure the CSRR instruction in stage1 performs a speculative write
+      // to the register file
+      gpr_regfile.writeRegSpeculative(?, ?);
+`endif
       rg_state <= CPU_CSRR_S_or_C_2;
    endrule: rl_stage1_CSRR_S_or_C
 
@@ -1201,6 +1350,9 @@ module mkCPU (CPU_IFC);
       if (! permitted) begin
 	 rg_state <= CPU_TRAP;
 
+`ifdef NEW_REG
+         gpr_regfile.writeReg (?, False);
+`endif
 	 // Debug
 	 if (cur_verbosity > 1) begin
 	    $display ("    Trap on CSR permissions: Rs1 %0d Rs1_val 0x%0h csr 0x%0h Rd %0d",
@@ -1218,7 +1370,11 @@ module mkCPU (CPU_IFC);
 
 	 // Writeback to GPR file
 	 let new_rd_val = csr_val;
+`ifdef NEW_REG
+         gpr_regfile.writeReg (new_rd_val, True);
+`else
 	 gpr_regfile.write_rd (rd, new_rd_val);
+`endif
 
 	 // Writeback to CSR file, but only if rs1 != 0
 	 WordXL          new_csr_val = ?;
@@ -1238,6 +1394,10 @@ module mkCPU (CPU_IFC);
 
 	 // Restart the pipe
 	 rg_state   <= CPU_CSRRX_RESTART;
+
+`ifdef NEW_PIPE_LOGIC
+         stage1.invalidate(True);
+`endif
 
 `ifdef INCLUDE_TANDEM_VERIF
 	 // Trace data
@@ -1362,7 +1522,9 @@ module mkCPU (CPU_IFC);
       rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
 `endif
 
+`ifndef Near_Mem_Avalon
       near_mem.server_fence_i.request.put (?);
+`endif
       rg_state <= CPU_FENCE_I;
 
       // Accounting
@@ -1391,12 +1553,22 @@ module mkCPU (CPU_IFC);
    rule rl_finish_FENCE_I (rg_state == CPU_FENCE_I);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_finish_FENCE_I", mcycle);
 
+`ifndef Near_Mem_Avalon
       // Await mem system FENCE.I completion
       let dummy <- near_mem.server_fence_i.response.get;
+`endif
 
       // Resume pipe
-      stageD.set_full (False);
+`ifdef NEW_PIPE_LOGIC
+      // TODO review this
+      stage1.invalidate (True);
+      stageD.invalidate (True);
+      //stageF.invalidate (True);
+`else
       stage1.set_full (False);    fa_step_check;
+      stageD.set_full (False);
+`endif
+
       fa_stageF_redirect (rg_next_pc
 `ifdef RVFI_DII
                                     , rg_next_seq
@@ -1425,7 +1597,9 @@ module mkCPU (CPU_IFC);
       rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
 `endif
 
+`ifndef Near_Mem_Avalon
       near_mem.server_fence.request.put (?);
+`endif
       rg_state <= CPU_FENCE;
 
       // Accounting
@@ -1454,12 +1628,20 @@ module mkCPU (CPU_IFC);
    rule rl_finish_FENCE (rg_state == CPU_FENCE);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_finish_FENCE", mcycle);
 
+`ifndef Near_Mem_Avalon
       // Await mem system FENCE completion
       let dummy <- near_mem.server_fence.response.get;
+`endif
 
       // Resume pipe
-      stageD.set_full (False);
+`ifdef NEW_PIPE_LOGIC
+      stage1.invalidate (True);
+      stageD.invalidate (True);
+`else
       stage1.set_full (False);    fa_step_check;
+      stageD.set_full (False);
+`endif
+
       fa_stageF_redirect (rg_next_pc
 `ifdef RVFI_DII
                                     , rg_next_seq
@@ -1531,8 +1713,16 @@ module mkCPU (CPU_IFC);
       let dummy <- near_mem.sfence_vma_server.response.get;
 
       // Resume pipe
-      stageD.set_full (False);
+`ifdef NEW_PIPE_LOGIC
+      // TODO review this
+      stage1.invalidate (True);
+      stageD.invalidate (True);
+      stageF.invalidate (True);
+`else
       stage1.set_full (False);    fa_step_check;
+      stageD.set_full (False);
+`endif
+
       fa_stageF_redirect (rg_next_pc
 `ifdef RVFI_DII
                                     , rg_next_seq
@@ -1564,8 +1754,14 @@ module mkCPU (CPU_IFC);
 
       rg_state   <= CPU_WFI_PAUSED;
 
-      stageD.set_full (False);
+`ifdef NEW_PIPE_LOGIC
+      // TODO review this
+      stage1.invalidate (True);
+      stageD.invalidate (True);
+`else
       stage1.set_full (False);    fa_step_check;
+      stageD.set_full (False);
+`endif
 
       // Accounting
       csr_regfile.csr_minstret_incr;
@@ -1599,7 +1795,12 @@ module mkCPU (CPU_IFC);
 `endif
 
       // Resume pipe (it will handle the interrupt, if one is pending)
+`ifdef NEW_PIPE_LOGIC
+      stageD.invalidate (True);
+      //stageF.invalidate (True);
+`else
       stageD.set_full (False);
+`endif
       fa_stageF_redirect (rg_next_pc
 `ifdef RVFI_DII
                                     , rg_next_seq
@@ -1623,7 +1824,16 @@ module mkCPU (CPU_IFC);
 
    rule rl_trap_fetch ((rg_state == CPU_START_TRAP_HANDLER)
 		       && (stageF.out.ostatus != OSTATUS_BUSY));
+      if (cur_verbosity > 1) begin
+         $display("rl_trap_fetch");
+      end
+
+`ifdef NEW_PIPE_LOGIC
+      // stageD should be invalidated before this rule executes
+`else
       stageD.set_full (False);
+`endif
+
       fa_stageF_redirect (rg_next_pc
 `ifdef RVFI_DII
                                     , rg_next_seq
@@ -1659,7 +1869,9 @@ module mkCPU (CPU_IFC);
       rg_state <= CPU_GDB_PAUSING;
 
       // Flush both caches -- using the same interface as that used by FENCE_I
+`ifndef Near_Mem_Avalon
       near_mem.server_fence_i.request.put (?);
+`endif
 
       // Notify debugger that we've halted
       f_run_halt_rsps.enq (False);
@@ -1670,7 +1882,9 @@ module mkCPU (CPU_IFC);
    // on entering CPU_GDB_PAUSING state
 
    rule rl_BREAK_cache_flush_finish (rg_state == CPU_GDB_PAUSING);
+`ifndef Near_Mem_Avalon
       let ack <- near_mem.server_fence_i.response.get;
+`endif
       rg_state <= CPU_DEBUG_MODE;
 
       // Notify debugger that we've halted
@@ -1754,8 +1968,10 @@ module mkCPU (CPU_IFC);
       rg_stop_req   <= False;
       rg_step_count <= 0;
 
+`ifndef Near_Mem_Avalon
       // Flush both caches -- using the same interface as that used by FENCE_I
       near_mem.server_fence_i.request.put (?);
+`endif
 
       // Accounting: none (instruction is abandoned)
    endrule: rl_stage1_stop
@@ -1826,6 +2042,7 @@ module mkCPU (CPU_IFC);
    rule rl_debug_read_gpr ((rg_state == CPU_DEBUG_MODE) && (! f_gpr_reqs.first.write));
       let req <- pop (f_gpr_reqs);
       Bit #(5) regname = req.address;
+      // TODO new register file with debug mode
       let data = gpr_regfile.read_rs1_port2 (regname);
       let rsp = DM_CPU_Rsp {ok: True, data: data};
       f_gpr_rsps.enq (rsp);
@@ -1838,6 +2055,7 @@ module mkCPU (CPU_IFC);
       let req <- pop (f_gpr_reqs);
       Bit #(5) regname = req.address;
       let data = req.data;
+      // TODO new register file with debug mode
       gpr_regfile.write_rd (regname, data);
 
       let rsp = DM_CPU_Rsp {ok: True, data: ?};

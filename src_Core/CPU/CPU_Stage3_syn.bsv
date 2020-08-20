@@ -71,7 +71,13 @@ module mkCPU_Stage3_syn (CPU_Stage3_syn_IFC);
 `endif
 `endif
 
-      return Output_Stage3 {ostatus: (rg_full ? OSTATUS_PIPE : OSTATUS_EMPTY),
+`ifdef NEW_PIPE_LOGIC
+      return Output_Stage3 {ostatus: (rg_full ? (rg_stage3.invalid ? OSTATUS_NOP : OSTATUS_PIPE)
+                                              : OSTATUS_EMPTY),
+`else
+      return Output_Stage3 {ostatus: (rg_full ? OSTATUS_PIPE
+                                              : OSTATUS_EMPTY),
+`endif
 			    bypass : bypass
 `ifdef ISA_F
 			    , fbypass: fbypass
