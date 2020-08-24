@@ -21,6 +21,7 @@ module mkNear_Mem (Near_Mem_IFC);
    Reg #(Bit #(XLEN)) rg_data_readdata[2] <- mkCReg (2, 0);
    Reg #(Bool)        rg_data_pending[3] <- mkCReg (3, False);
    Reg #(Bit #(2))    rg_data_response[2] <- mkCReg (2, 0);
+   Reg #(Bit #(3))    rg_data_f3[2] <- mkCReg (2, 0);
 
    // registers to hold current request
    // these stay the same until a new request is made
@@ -126,7 +127,11 @@ module mkNear_Mem (Near_Mem_IFC);
          // valid
          // for the moment, just look at whether waitrequest was high at the end of a
          // cycle where we made a write request
+`ifdef DELAY_MEMORY
          if (  (rg_instr_pending[0] && rg_instr_write[0] && !rg_instr_waitrequest_delayed[0]) // receiving a write response
+`else
+         if (  (rg_instr_pending[0] && rg_instr_write[0] && !rg_instr_waitrequest[0]) // receiving a write response
+`endif
             || inputs.avm_readdatavalid) // receiving a read response
          begin
             rg_instr_pending[0] <= False;
@@ -138,11 +143,19 @@ module mkNear_Mem (Near_Mem_IFC);
 
       method Avalon_Outputs out;
          return Avalon_Outputs {
+`ifdef DELAY_MEMORY
             avm_address    : rg_instr_addr[0],
             avm_read       : rg_instr_read[0] && rg_instr_pending[0],
             avm_write      : rg_instr_write[0] && rg_instr_pending[0],
             avm_writedata  : rg_instr_writedata[0],
             avm_byteenable : rg_instr_byteenable[0]
+`else
+            avm_address    : rg_instr_addr[1],
+            avm_read       : rg_instr_read[1] && rg_instr_pending[2],
+            avm_write      : rg_instr_write[1] && rg_instr_pending[2],
+            avm_writedata  : rg_instr_writedata[1],
+            avm_byteenable : rg_instr_byteenable[1]
+`endif
          };
       endmethod
    endinterface
@@ -166,6 +179,7 @@ module mkNear_Mem (Near_Mem_IFC);
          rg_data_addr[0] <= addr;
          rg_data_read[0] <= op == CACHE_LD;
          rg_data_write[0] <= op == CACHE_ST;
+         rg_data_f3[0] <= f3;
          rg_data_writedata[0] <= truncate(store_value);
          rg_data_byteenable[0] <= fn_byteenable_from_req(f3, addr);
          rg_data_pending[1] <= True;
@@ -176,7 +190,7 @@ module mkNear_Mem (Near_Mem_IFC);
       // this will still be called word64 to simplify the work being undertaken
       // when in the core, this is always truncated to a WordXL
       // TODO change this (and the signals in the core) to be XLEN rather than hardcoded 64
-      method Bit #(64)  word64 = zeroExtend(rg_data_readdata[1]);      // Load-value
+      method Bit #(64)  word64 = zeroExtend(fn_extend_bytes(rg_data_f3[0], zeroExtend(rg_data_readdata[1])));      // Load-value
       // TODO not sure what this value is used for
       method Bit #(64)  st_amo_val = zeroExtend(rg_data_writedata[1]);  // Final store-value for ST, SC, AMO
       method Bool       exc = (|(rg_data_response[1]) == 1) ? True : False;
@@ -190,7 +204,11 @@ module mkNear_Mem (Near_Mem_IFC);
       method Action in (Avalon_Inputs inputs);
          rg_data_waitrequest[0] <= inputs.avm_waitrequest;
          rg_data_waitrequest_delayed[0] <= rg_data_waitrequest[0];
+`ifdef DELAY_MEMORY
          if (  (rg_data_pending[0] && rg_data_write[0] && !rg_data_waitrequest_delayed[0]) // receiving a write response
+`else
+         if (  (rg_data_pending[0] && rg_data_write[0] && !rg_data_waitrequest[0]) // receiving a write response
+`endif
             || inputs.avm_readdatavalid) // receiving a read response
          begin
             rg_data_pending[0] <= False;
@@ -202,11 +220,19 @@ module mkNear_Mem (Near_Mem_IFC);
 
       method Avalon_Outputs out;
          return Avalon_Outputs {
+`ifdef DELAY_MEMORY
             avm_address    : rg_data_addr[0],
             avm_read       : rg_data_read[0] && rg_data_pending[0],
             avm_write      : rg_data_write[0] && rg_data_pending[0],
             avm_writedata  : rg_data_writedata[0],
             avm_byteenable : rg_data_byteenable[0]
+`else
+            avm_address    : rg_data_addr[1],
+            avm_read       : rg_data_read[1] && rg_data_pending[2],
+            avm_write      : rg_data_write[1] && rg_data_pending[2],
+            avm_writedata  : rg_data_writedata[1],
+            avm_byteenable : rg_data_byteenable[1]
+`endif
          };
       endmethod
    endinterface

@@ -197,6 +197,22 @@ function Bit #(XLEN) fn_extract_and_extend_bytes (Bit #(3) f3, WordXL byte_addr,
    return result;
 endfunction
 
+function Bit #(XLEN) fn_extend_bytes (Bit #(3) f3, Bit #(XLEN) wordxl);
+   Bit #(XLEN) result = ?;
+   case (f3)
+      f3_LB:  result = signExtend (wordxl [ 7:0]);
+      f3_LBU: result = zeroExtend (wordxl [ 7:0]);
+      f3_LH:  result = signExtend (wordxl [15:0]);
+      f3_LHU: result = zeroExtend (wordxl [15:0]);
+      f3_LW:  result = signExtend (wordxl [31:0]);
+      f3_LWU: result = zeroExtend (wordxl [31:0]); // TODO is LWU allowed in RV32?
+`ifdef RV64
+      f3_LD:  result = zeroExtend (wordxl [31:0]);
+`endif
+   endcase
+   return result;
+endfunction
+
 
 function Bit #(Bytes_per_WordXL) fn_byteenable_from_req (Bit #(3) f3, WordXL addr);
    Bit #(Bytes_per_WordXL) result = 0;
@@ -207,34 +223,11 @@ function Bit #(Bytes_per_WordXL) fn_byteenable_from_req (Bit #(3) f3, WordXL add
 `endif
    case (f3)
       f3_LB, f3_LBU, f3_SB:
-         case (addr_lsbs)
-            'h0: result = zeroExtend(4'b0001);
-            'h1: result = zeroExtend(4'b0010);
-            'h2: result = zeroExtend(4'b0100);
-            'h3: result = zeroExtend(4'b1000);
-`ifdef RV64
-            'h4: result = zeroExtend(8'b0001_0000);
-            'h5: result = zeroExtend(8'b0010_0000);
-            'h6: result = zeroExtend(8'b0100_0000);
-            'h7: result = zeroExtend(8'b1000_0000);
-`endif
-         endcase
+         result = zeroExtend(4'b0001);
       f3_LH, f3_LHU, f3_SH:
-         case (addr_lsbs)
-            'h0: result = zeroExtend(4'b0011);
-            'h2: result = zeroExtend(4'b1100);
-`ifdef RV64
-            'h4: result = zeroExtend(8'b0011_0000);
-            'h6: result = zeroExtend(8'b1100_0000);
-`endif
-         endcase
+         result = zeroExtend(4'b0011);
       f3_LWU, f3_SW:
-         case (addr_lsbs)
-            'h0: result = zeroExtend(4'b1111);
-`ifdef RV64
-            'h4: result = zeroExtend(8'b1111_0000);
-`endif
-         endcase
+         result = zeroExtend(4'b1111);
 `ifdef RV64
       f3_LD, f3_SD:
          case (addr_lsbs)
