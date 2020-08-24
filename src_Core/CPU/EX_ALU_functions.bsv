@@ -85,6 +85,9 @@ endfunction
 typedef struct {
    Control    control;
    Exc_Code   exc_code;        // Relevant if control == CONTROL_TRAP
+`ifdef DELAY_STAGE1_TRAPS
+   Bool       trap;
+`endif
 
    Op_Stage2  op_stage2;
    RegName    rd;
@@ -127,7 +130,12 @@ CF_Info cf_info_base = CF_Info {cf_op       : CF_None,
 ALU_Outputs alu_outputs_base
 = ALU_Outputs {control     : CONTROL_STRAIGHT,
 	       exc_code    : exc_code_ILLEGAL_INSTRUCTION,
+`ifdef DELAY_STAGE1_TRAPS
+               trap        : False,
+	       op_stage2   : OP_Stage2_ALU,
+`else
 	       op_stage2   : ?,
+`endif
 	       rd          : ?,
 	       addr        : ?,
 	       val1        : ?,
@@ -1617,7 +1625,12 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
            		    taken_PC    : branch_target };
 
       let next_pc     = (branch_taken ? branch_target : fallthru_pc);
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = branch_taken ? CONTROL_BRANCH : CONTROL_STRAIGHT;
+      alu_outputs.trap      = trap;
+`else
       alu_outputs.control   = (trap ? CONTROL_TRAP : (branch_taken ? CONTROL_BRANCH : CONTROL_STRAIGHT));
+`endif
       alu_outputs.exc_code  = exc_code;
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = 0;
@@ -1643,7 +1656,13 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
            		       fallthru_PC : fallthru_pc,
            		       taken_PC    : next_pc };
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_BRANCH;
+      alu_outputs.trap      = misaligned_target;
+`else
       alu_outputs.control   = (misaligned_target ? CONTROL_TRAP : CONTROL_BRANCH);
+`endif
+
       alu_outputs.exc_code  = exc_code_INSTR_ADDR_MISALIGNED;
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = inputs.decoded_instr.rd;
@@ -1673,7 +1692,12 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 			       fallthru_PC : fallthru_pc,
 			       taken_PC    : next_pc };
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_BRANCH;
+      alu_outputs.trap      = misaligned_target;
+`else
       alu_outputs.control   = (misaligned_target ? CONTROL_TRAP : CONTROL_BRANCH);
+`endif
       alu_outputs.exc_code  = exc_code_INSTR_ADDR_MISALIGNED;
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = inputs.decoded_instr.rd;
@@ -1747,7 +1771,12 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       // TODO deal with left shifts being reversed
       // Trap in RV32 if shamt > 31, i.e., if imm12_I [5] is 1
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_STRAIGHT;
+      alu_outputs.trap      = trap;
+`else
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+`endif
       alu_outputs.rd        = inputs.decoded_instr.rd;
 
 `ifndef SHIFT_SERIAL
@@ -1797,7 +1826,12 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       else if (funct3 == f3_ORI)   rd_val = pack (s_rs1_val | s_rs2_val_local);
       else if (funct3 == f3_ANDI)  rd_val = pack (s_rs1_val & s_rs2_val_local);
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_STRAIGHT;
+      alu_outputs.trap      = trap;
+`else
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+`endif
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = inputs.decoded_instr.rd;
       alu_outputs.val1      = rd_val;
@@ -1826,7 +1860,12 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          rd_val = signExtend(shift_res_b32);
       end
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_STRAIGHT;
+      alu_outputs.trap      = trap;
+`else
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+`endif
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = inputs.decoded_instr.rd;
       alu_outputs.val1      = rd_val;
@@ -1865,7 +1904,12 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
          rd_val = signExtend(shift_res_b32);
       end
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_STRAIGHT;
+      alu_outputs.trap      = trap;
+`else
       alu_outputs.control   = (trap ? CONTROL_TRAP : CONTROL_STRAIGHT);
+`endif
       alu_outputs.op_stage2 = OP_Stage2_ALU;
       alu_outputs.rd        = inputs.decoded_instr.rd;
       alu_outputs.val1      = rd_val;
@@ -1954,8 +1998,13 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 `endif
 
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_STRAIGHT;
+      alu_outputs.trap      = !(legal_LD && legal_FP_LD);
+`else
       alu_outputs.control   = ((legal_LD && legal_FP_LD) ? CONTROL_STRAIGHT
                                                          : CONTROL_TRAP);
+`endif
       alu_outputs.op_stage2 = OP_Stage2_LD;
       alu_outputs.rd        = inputs.decoded_instr.rd;
       alu_outputs.addr      = eaddr;
@@ -2019,8 +2068,13 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
       end
 `endif
 
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control   = CONTROL_STRAIGHT;
+      alu_outputs.trap      = !(legal_ST && legal_FP_ST);
+`else
       alu_outputs.control   = ((legal_ST && legal_FP_ST) ? CONTROL_STRAIGHT
                                                          : CONTROL_TRAP);
+`endif
       alu_outputs.op_stage2 = OP_Stage2_ST;
       alu_outputs.addr      = eaddr;
 
@@ -2053,11 +2107,21 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 
 
    else if (inputs.decoded_instr.opcode == op_MISC_MEM) begin
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control  = (  (inputs.decoded_instr.funct3 == f3_FENCE_I)
+			      ? CONTROL_FENCE_I
+			      : (  (inputs.decoded_instr.funct3 == f3_FENCE)
+			         ? CONTROL_FENCE
+			         : CONTROL_STRAIGHT));
+      alu_outputs.trap     = (   inputs.decoded_instr.funct3 != f3_FENCE_I
+                              && inputs.decoded_instr.funct3 != f3_FENCE);
+`else
       alu_outputs.control  = (  (inputs.decoded_instr.funct3 == f3_FENCE_I)
 			      ? CONTROL_FENCE_I
 			      : (  (inputs.decoded_instr.funct3 == f3_FENCE)
 			         ? CONTROL_FENCE
 			         : CONTROL_TRAP));
+`endif
 
 `ifdef INCLUDE_TANDEM_VERIF
       // Normal trace output (if no trap)
@@ -2097,7 +2161,13 @@ function ALU_Outputs fv_ALU (ALU_Inputs inputs);
 `endif
 
    else begin
+`ifdef DELAY_STAGE1_TRAPS
+      alu_outputs.control = CONTROL_STRAIGHT;
+      alu_outputs.trap    = True;
+      alu_outputs.op_stage2 = OP_Stage2_ALU;
+`else
       alu_outputs.control = CONTROL_TRAP;
+`endif
 
 `ifdef INCLUDE_TANDEM_VERIF
       // Normal trace output (if no trap)

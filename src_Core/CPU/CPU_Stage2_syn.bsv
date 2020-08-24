@@ -125,6 +125,20 @@ module mkCPU_Stage2_syn (CPU_Stage2_syn_IFC);
 					};
       end
 
+`ifdef DELAY_STAGE1_TRAPS
+      else if (rg_stage2.trap) begin
+         let data_to_stage3 = data_to_stage3_base;
+         output_stage2 = Output_Stage2 {ostatus          : OSTATUS_NONPIPE,
+                                        trap_info        : rg_stage2.trap_info,
+                                        data_to_stage3   : data_to_stage3,
+                                        bypass           : no_bypass
+`ifdef ISA_F
+                                        , fbypass        : no_fbypass,
+`endif
+                                       };
+      end
+`endif
+
       // This stage is just relaying ALU results from previous stage to next stage
       else if (rg_stage2.op_stage2 == OP_Stage2_ALU) begin
 	 let data_to_stage3 = data_to_stage3_base;

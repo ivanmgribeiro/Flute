@@ -216,6 +216,11 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 	 Bool op_stage2_amo = False;
 	 Bit #(7) amo_funct7 = 0;
 `endif
+`ifdef DELAY_STAGE1_TRAPS
+         if (x.trap) begin
+            // do nothing on trap
+         end else
+`endif
 	 if ((x.op_stage2 == OP_Stage2_LD) || (x.op_stage2 == OP_Stage2_ST) || op_stage2_amo) begin
 	    WordXL   mstatus     = csr_regfile.read_mstatus;
 `ifdef ISA_PRIV_S

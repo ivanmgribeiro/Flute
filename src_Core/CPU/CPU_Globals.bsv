@@ -432,6 +432,10 @@ typedef struct {
    Dii_Id instr_seq;
 `endif
    Op_Stage2  op_stage2;
+`ifdef DELAY_STAGE1_TRAPS
+   Bool       trap;
+   Trap_Info              trap_info;
+`endif
    RegName    rd;
    Addr       addr;              // Branch, jump: newPC
                                  // Mem ops and AMOs: mem addr
@@ -491,7 +495,11 @@ typedef struct {
 instance FShow #(Data_Stage1_to_Stage2);
    function Fmt fshow (Data_Stage1_to_Stage2 x);
       Fmt fmt =   $format ("data_to_Stage 2 {pc:%h  instr:%h  priv:%0d\n", x.pc, x.instr, x.priv);
+`ifdef DELAY_STAGE1_TRAPS
+      fmt = fmt + $format ("            op_stage2:", fshow (x.op_stage2), "  rd:%0d", x.rd, "  trap: ", fshow(x.trap), "\n");
+`else
       fmt = fmt + $format ("            op_stage2:", fshow (x.op_stage2), "  rd:%0d\n", x.rd);
+`endif
       fmt = fmt + $format ("            addr:%h  val1:%h  val2:%h}",
 			   x.addr, x.val1, x.val2);
 `ifdef ISA_F

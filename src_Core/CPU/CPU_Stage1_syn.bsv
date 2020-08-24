@@ -90,6 +90,10 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 
    let data_to_stage2 = Data_Stage1_to_Stage2 {pc            : rg_stage_input.pc,
 					       instr         : rg_stage_input.instr,
+`ifdef DELAY_STAGE1_TRAPS
+                                               trap:      False,
+                                               trap_info : ?,
+`endif
 `ifdef RVFI_DII
                                                instr_seq     : rg_stage_input.instr_seq,
 `endif
@@ -136,6 +140,10 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 	 // For debugging only
 	 let data_to_stage2 = Data_Stage1_to_Stage2 {pc:        rg_stage_input.pc,
 						     instr:     rg_stage_input.instr,
+`ifdef DELAY_STAGE1_TRAPS
+                                                     trap:      False,
+                                                     trap_info : ?,
+`endif
 `ifdef RVFI_DII
                                                      instr_seq: rg_stage_input.instr_seq,
 `endif
@@ -184,7 +192,13 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 	 output_stage1.trap_info = Trap_Info {epc:      rg_stage_input.pc,
 					      exc_code: rg_stage_input.exc_code,
 					      tval:     rg_stage_input.tval};
+`ifdef DELAY_STAGE1_TRAPS
+         let data_to_stage2_local      = data_to_stage2;
+         data_to_stage2_local.trap = True;
+	 output_stage1.data_to_stage2 = data_to_stage2_local;
+`else
 	 output_stage1.data_to_stage2 = data_to_stage2;
+`endif
       end
 
       // ALU outputs: pipe (straight/branch)
@@ -216,6 +230,16 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 				    exc_code: alu_outputs.exc_code,
 				    tval:     tval};
 
+`ifdef DELAY_STAGE1_TRAPS
+         let data_to_stage2_local = data_to_stage2;
+         data_to_stage2_local.trap_info = trap_info;
+         data_to_stage2_local.trap = alu_outputs.trap;
+	 output_stage1.data_to_stage2 = data_to_stage2_local;
+`else
+	 output_stage1.data_to_stage2 = data_to_stage2;
+
+`endif
+
          // if we are not using branch prediction, then we can remove this comparison, since
          // next_pc is calculated in precisely the same way as pred_pc
 	 // let redirect = (next_pc != rg_stage_input.pred_pc);
@@ -227,7 +251,6 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 	 output_stage1.redirect       = redirect;
 	 output_stage1.next_pc        = next_pc;
 	 output_stage1.cf_info        = alu_outputs.cf_info;
-	 output_stage1.data_to_stage2 = data_to_stage2;
       end
 
       return output_stage1;
