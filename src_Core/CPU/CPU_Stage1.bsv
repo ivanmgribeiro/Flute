@@ -98,6 +98,15 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 
    Reg #(Bool)                  rg_full        <- mkReg (False);
    Reg #(Data_StageD_to_Stage1) rg_stage_input <- mkRegUSynth_Dto1;
+`ifdef NEW_BYPASS
+   Reg #(WordXL) rg_rs1_val <- mkRegU;
+   Reg #(WordXL) rg_rs2_val <- mkRegU;
+   Reg #(Bool) rg_rs1_busy <- mkReg (False);
+   Reg #(Bool) rg_rs2_busy <- mkReg (False);
+
+   Wire #(RegName) dw_rs1 <- mkDWire (0);
+   Wire #(RegName) dw_rs2 <- mkDWire (0);
+`endif
 
    MISA misa   = csr_regfile.read_misa;
    Bit #(2) xl = ((xlen == 32) ? misa_mxl_32 : misa_mxl_64);
@@ -117,6 +126,13 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    let decoded_instr  = rg_stage_input.decoded_instr;
    let funct3         = decoded_instr.funct3;
 
+`ifdef NEW_BYPASS
+   Bool rs1_busy = rg_rs1_busy;
+   Word rs1_val_bypassed = rg_rs1_val;
+
+   Bool rs2_busy = rg_rs2_busy;
+   Word rs2_val_bypassed = rg_rs2_val;
+`else
    // Register rs1 read and bypass
    let rs1 = decoded_instr.rs1;
    let rs1_val = gpr_regfile.read_rs1 (rs1);
@@ -132,6 +148,8 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
    Bool rs2_busy = (busy2a || busy2b);
    Word rs2_val_bypassed = ((rs2 == 0) ? 0 : rs2b);
+`endif
+
 
 `ifdef ISA_F
    // FP Register rs1 read and bypass
@@ -190,6 +208,44 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
       alu_wrapper.put_inputs(alu_inputs);
    endrule
 
+`ifdef NEW_BYPASS
+   rule rl_stage1_forwarding (rg_rs1_busy || rg_rs2_busy);
+      let decoded_instr = rg_stage_input.decoded_instr;
+      let rs1 = rg_stage_input.decoded_instr.rs1;
+      let rs2 = rg_stage_input.decoded_instr.rs2;
+
+      // TODO this might not be right, since the values we read from the
+      // GPR on enq might get overwritten by bypass logic
+      // however, it should be right
+      let rs1_val = rg_rs1_val;
+      let rs2_val = rg_rs2_val;
+
+      // TODO this bypassing logic will be replicated
+      match { .busy1a, .rs1a } = fn_gpr_bypass (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } = fn_gpr_bypass (bypass_from_stage2, rs1, rs1a);
+
+      match { .busy2a, .rs2a } = fn_gpr_bypass (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
+
+      rg_rs1_val <= (rs1 != 0) ? rs1b : 0;
+      rg_rs2_val <= (rs2 != 0) ? rs2b : 0;
+      rg_rs1_busy <= busy1a || busy1b;
+      rg_rs2_busy <= busy2a || busy2b;
+      if (verbosity > 1) begin
+         $display ("    CPU_Stage1 rl_stage1_forwarding: pc: 0x%08h, instr: 0x%0h", rg_stage_input.pc, rg_stage_input.instr);
+         $display ("      rs1: %0d", rs1);
+         $display ("      rs1a: %0h", rs1a);
+         $display ("      rg_rs1_val write: %0h", (rs1 != 0) ? rs1b : 0);
+         $display ("      rg_rs1_busy write: ", fshow(busy1a || busy1b));
+         $display ("      rs2: %0d", rs2);
+         $display ("      rs2a: %0h", rs2a);
+         $display ("      rg_rs2_val write: %0h", (rs2 != 0) ? rs2b : 0);
+         $display ("      rg_rs2_busy write: ", fshow(busy2a || busy2b));
+         $display ("      rd: %0d", decoded_instr.rd);
+      end
+   endrule
+`endif
+
 
    // ----------------
    // Combinational output function
@@ -215,7 +271,6 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 
    let fv_out = stage1_wrapper.get_outputs;
 
-
    // ================================================================
    // INTERFACE
 
@@ -231,10 +286,68 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    endmethod
 
    // ---- Input
-   method Action enq (Data_StageD_to_Stage1  data);
+   method Action enq (Data_StageD_to_Stage1  data) if (!(rg_rs1_busy || rg_rs2_busy));
+`ifdef NEW_BYPASS
+      let decoded_instr = data.decoded_instr;
+      let rs1 = data.decoded_instr.rs1;
+      let rs2 = data.decoded_instr.rs2;
+
+      let rs1_val = gpr_regfile.read_rs1 (rs1);
+      let rs2_val = gpr_regfile.read_rs2 (rs2);
+
+      match { .busy1a, .rs1a } = fn_gpr_bypass (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } = fn_gpr_bypass (bypass_from_stage2, rs1, rs1a);
+
+      match { .busy2a, .rs2a } = fn_gpr_bypass (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
+
+      let rs1c = rs1b;
+      let rs2c = rs2b;
+      let busy1c = False;
+      let busy2c = False;
+      if (rg_full && fv_out.ostatus == OSTATUS_PIPE) begin
+         if (fv_out.data_to_stage2.op_stage2 == OP_Stage2_ST) begin
+
+         end
+         else if (fv_out.data_to_stage2.op_stage2 == OP_Stage2_ALU) begin
+            //if (rs1 == rg_stage_input.decoded_instr.rd) begin
+            if (rs1 == fv_out.data_to_stage2.rd) begin
+               rs1c = fv_out.data_to_stage2.val1;
+            end
+            //if (rs2 == rg_stage_input.decoded_instr.rd) begin
+            if (rs2 == fv_out.data_to_stage2.rd) begin
+               rs2c = fv_out.data_to_stage2.val1;
+            end
+         end
+         else begin
+            if (rs1 == rg_stage_input.decoded_instr.rd) begin
+               busy1c = True;
+            end
+            if (rs2 == rg_stage_input.decoded_instr.rd) begin
+               busy2c = True;
+            end
+         end
+      end
+
+      rg_rs1_val <= (rs1 != 0) ? rs1c : 0;
+      rg_rs2_val <= (rs2 != 0) ? rs2c : 0;
+      rg_rs1_busy <= busy1a || busy1b || busy1c;
+      rg_rs2_busy <= busy2a || busy2b || busy2c;
+`endif
+
       rg_stage_input <= data;
-      if (verbosity > 1)
-	 $display ("    CPU_Stage1.enq: 0x%08h", data.pc);
+`ifdef NEW_BYPASS
+      if (verbosity > 1) begin
+         $display ("    CPU_Stage1.enq: pc: 0x%08h, instr: 0x%0h", data.pc, data.instr);
+         $display ("      rs1: %0d", rs1);
+         $display ("      rg_rs1_val write: %0h", (rs1 != 0) ? rs1c : 0);
+         $display ("      rg_rs1_busy write: ", fshow(busy1a || busy1b || busy1c));
+         $display ("      rs2: %0d", rs2);
+         $display ("      rg_rs2_val write: %0h", (rs2 != 0) ? rs2c : 0);
+         $display ("      rg_rs2_busy write: ", fshow(busy2a || busy2b || busy2c));
+         $display ("      rd: %0d", decoded_instr.rd);
+      end
+`endif
    endmethod
 
    method Action set_full (Bool full);
