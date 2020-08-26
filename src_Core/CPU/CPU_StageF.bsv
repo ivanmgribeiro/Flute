@@ -36,6 +36,13 @@ import Branch_Predictor  :: *;
 import RVFI_DII          :: *;
 `endif
 
+`ifdef NEW_BYPASS
+`ifdef ISA_C
+// 'C' extension (16b compressed instructions)
+import CPU_Decode_C     :: *;
+`endif
+`endif
+
 // ================================================================
 // Interface
 
@@ -75,9 +82,16 @@ endinterface
 // ================================================================
 // Implementation module
 
+`ifdef NEW_BYPASS
+module mkCPU_StageF #(Bit #(4)  verbosity,
+		      IMem_IFC  imem,
+                      MISA misa)
+                    (CPU_StageF_IFC);
+`else
 module mkCPU_StageF #(Bit #(4)  verbosity,
 		      IMem_IFC  imem)
                     (CPU_StageF_IFC);
+`endif
 
    FIFOF #(Token)  f_reset_reqs <- mkFIFOF;
    FIFOF #(Token)  f_reset_rsps <- mkFIFOF;
@@ -100,14 +114,45 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
       f_reset_rsps.enq (?);
    endrule
 
-   // ----------------
-   // Combinational output function
-
-   function Output_StageF fv_out;
 `ifdef RVFI_DII
       let imem_instr = tpl_1(imem.instr);
 `else
       let imem_instr = imem.instr;
+`endif
+
+`ifdef NEW_BYPASS
+`ifdef ISA_C
+   Bit #(2) xl = ((xlen == 32) ? misa_mxl_32 : misa_mxl_64);
+   Instr_C instr_C = imem_instr[15:0];
+
+   let decode_c_wrapper <- mkDecodeC;
+   rule assign_decode_c_inputs;
+      decode_c_wrapper.put_inputs(misa, xl, instr_C);
+   endrule
+
+   let decomp_instr = decode_c_wrapper.get_outputs;
+`endif
+`endif
+
+   // ----------------
+   // Combinational output function
+
+   function Output_StageF fv_out;
+`ifdef NEW_BYPASS
+`ifdef ISA_C
+      let rs1_addr = ?;
+      let rs2_addr = ?;
+      if (imem.is_i32_not_i16) begin
+         rs1_addr = instr_rs1 (imem_instr);
+         rs2_addr = instr_rs2 (imem_instr);
+      end else begin
+         rs1_addr = instr_rs1 (decomp_instr);
+         rs2_addr = instr_rs2 (decomp_instr);
+      end
+`else
+      let rs1_addr = instr_rs1 (imem_instr);
+      let rs2_addr = instr_rs2 (imem_instr);
+`endif
 `endif
 
       //let pred_pc = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem_instr);
@@ -119,7 +164,21 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
 				     exc:             imem.exc,
 				     exc_code:        imem.exc_code,
 				     tval:            imem.tval,
+`ifdef NEW_BYPASS
+`ifdef ISA_C
+                                     instr:           imem.is_i32_not_i16 ? imem_instr : decomp_instr,
+`else
+                                     instr:           imem_instr,
+`endif
+`else
 				     instr:           imem_instr,
+`endif
+
+`ifdef NEW_BYPASS
+                                     rs1:             rs1_addr,
+                                     rs2:             rs2_addr,
+`endif
+
 `ifdef RVFI_DII
                                      instr_seq:       tpl_2(imem.instr),
 `endif

@@ -278,9 +278,17 @@ module mkCPU (CPU_IFC);
 					   rg_epoch,
 					   rg_cur_priv);
 
+`ifdef NEW_BYPASS
+   CPU_StageD_IFC  stageD <- mkCPU_StageD (cur_verbosity, gpr_regfile, misa);
+`else
    CPU_StageD_IFC  stageD <- mkCPU_StageD (cur_verbosity, misa);
+`endif
 
+`ifdef NEW_BYPASS
+   CPU_StageF_IFC  stageF <- mkCPU_StageF (cur_verbosity, imem, misa);
+`else
    CPU_StageF_IFC  stageF <- mkCPU_StageF (cur_verbosity, imem);
+`endif
 
    // ----------------
    // Interrupt pending based on current priv, mstatus.ie, mie and mip registers
@@ -720,6 +728,19 @@ module mkCPU (CPU_IFC);
 `endif
 `endif
 
+`ifdef NEW_BYPASS
+   // stage1_rl_stage1_forwarding has the explicit condition (rg_rs1_busy || rg_rs2_busy)
+   // stage1.enq has the explicit condition (!(rg_rs1_busy || rg_rs2_busy))
+   // rg_rs1_busy and rg_rs2_busy are both registers, so it is not possible for
+   // both those conditions to be true on the same clock cycle and this makes them mutually
+   // exclusive
+   // However, since rl_pipe does not always call stage1.enq, it is not true that
+   // rl_pipe and stage1_rl_stage1_forwarding are mutually exclusive. However, due to
+   // that same condition it is not possible for stage1.enq and stage1_rl_stage1_forwarding
+   // to execute on the same cycle. bsc doesn't seem to realise this, so it gives
+   // warnings about stage1_rl_stage1_forwarding and rl_pipe conflicting
+   (* descending_urgency = "stage1_rl_stage1_forwarding, rl_pipe" *)
+`endif
    rule rl_pipe (   (rg_state == CPU_RUNNING)
 		 && (! pipe_is_empty)
 		 && (! pipe_has_nonpipe)

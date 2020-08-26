@@ -248,6 +248,10 @@ typedef struct {
    Exc_Code   exc_code;
    WordXL     tval;               // Trap value; can be different from PC, with 'C' extension
    Instr      instr;              // Valid if no exception
+`ifdef NEW_BYPASS
+   RegName    rs1;
+   RegName    rs2;
+`endif
    WordXL     pred_pc;            // Predicted next pc
    } Data_StageF_to_StageD
 deriving (Bits);
@@ -309,6 +313,10 @@ typedef struct {
    WordXL         tval;               // Trap value; can be different from PC, with 'C' extension
 
    Instr          instr;              // Valid if no exception
+`ifdef NEW_BYPASS
+   WordXL         rs1_val;
+   WordXL         rs2_val;
+`endif
    Instr_C        instr_C;            // Valid if no exception; original compressed instruction
    WordXL         pred_pc;            // Predicted next pc
    Decoded_Instr  decoded_instr;

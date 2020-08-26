@@ -31,6 +31,9 @@ import Cur_Cycle :: *;
 import ISA_Decls        :: *;
 import CPU_Globals      :: *;
 import Near_Mem_IFC     :: *;
+`ifdef NEW_BYPASS
+import GPR_RegFile      :: *;
+`endif
 
 `ifdef ISA_C
 // 'C' extension (16b compressed instructions)
@@ -62,8 +65,15 @@ endinterface
 // ================================================================
 // Implementation module
 
+`ifdef NEW_BYPASS
+module mkCPU_StageD #(Bit #(4)  verbosity
+		     , GPR_RegFile_IFC  gpr_regfile
+                     , MISA misa)
+                    (CPU_StageD_IFC);
+`else
 module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
                     (CPU_StageD_IFC);
+`endif
 
    FIFOF #(Token)  f_reset_reqs <- mkFIFOF;
    FIFOF #(Token)  f_reset_rsps <- mkFIFOF;
@@ -74,6 +84,9 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
    Bit #(2) xl = ((xlen == 32) ? misa_mxl_32 : misa_mxl_64);
 
    Instr instr = rg_data.instr;
+
+   // If we are using NEW_BYPASS, the instruction decompression happens in StageF
+`ifndef NEW_BYPASS
 `ifdef ISA_C
    Instr_C instr_C = instr [15:0];
 
@@ -84,6 +97,7 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
 
    if (! rg_data.is_i32_not_i16)
       instr = decode_c_wrapper.get_outputs;
+`endif
 `endif
 
    let decode_wrapper <- mkDecode;
@@ -99,6 +113,14 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
       rg_full <= False;
       f_reset_rsps.enq (?);
    endrule
+
+`ifdef NEW_BYPASS
+   let rs1 = rg_data.rs1;
+   let rs2 = rg_data.rs2;
+
+   let rs1_val = gpr_regfile.read_rs1 (rs1);
+   let rs2_val = gpr_regfile.read_rs2 (rs2);
+`endif
 
    // ----------------
    // Combinational output function
@@ -125,8 +147,16 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
 							       exc_code:       rg_data.exc_code,
 							       tval:           rg_data.tval,
 							       instr:          instr,
+`ifdef NEW_BYPASS
+                                                               rs1_val: rs1_val,
+                                                               rs2_val: rs2_val,
+`endif
 `ifdef ISA_C
+`ifdef NEW_BYPASS
+							       instr_C:        ?,
+`else
 							       instr_C:        instr_C,
+`endif
 `endif
 							       pred_pc:        rg_data.pred_pc,
 							       decoded_instr:  decoded_instr};

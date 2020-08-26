@@ -21,6 +21,9 @@ import FIFOF        :: *;
 import GetPut       :: *;
 import ClientServer :: *;
 import ConfigReg    :: *;
+`ifdef NEW_BYPASS
+import UniqueWrappers :: *;
+`endif
 
 // ----------------
 // BSV additional libs
@@ -209,6 +212,13 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    endrule
 
 `ifdef NEW_BYPASS
+`ifdef DEDUPLICATE_BYPASS
+   let bypass_wrapper_1a <- mkUniqueWrapper3(fn_gpr_bypass);
+   let bypass_wrapper_2a <- mkUniqueWrapper3(fn_gpr_bypass);
+   let bypass_wrapper_1b <- mkUniqueWrapper3(fn_gpr_bypass);
+   let bypass_wrapper_2b <- mkUniqueWrapper3(fn_gpr_bypass);
+`endif
+
    rule rl_stage1_forwarding (rg_rs1_busy || rg_rs2_busy);
       let decoded_instr = rg_stage_input.decoded_instr;
       let rs1 = rg_stage_input.decoded_instr.rs1;
@@ -220,12 +230,19 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
       let rs1_val = rg_rs1_val;
       let rs2_val = rg_rs2_val;
 
-      // TODO this bypassing logic will be replicated
+`ifdef DEDUPLICATE_BYPASS
+      match { .busy1a, .rs1a } <- bypass_wrapper_1a.func (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } <- bypass_wrapper_1b.func (bypass_from_stage2, rs1, rs1a);
+
+      match { .busy2a, .rs2a } <- bypass_wrapper_2a.func (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } <- bypass_wrapper_2b.func (bypass_from_stage2, rs2, rs2a);
+`else
       match { .busy1a, .rs1a } = fn_gpr_bypass (bypass_from_stage3, rs1, rs1_val);
       match { .busy1b, .rs1b } = fn_gpr_bypass (bypass_from_stage2, rs1, rs1a);
 
       match { .busy2a, .rs2a } = fn_gpr_bypass (bypass_from_stage3, rs2, rs2_val);
       match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
+`endif
 
       rg_rs1_val <= (rs1 != 0) ? rs1b : 0;
       rg_rs2_val <= (rs2 != 0) ? rs2b : 0;
@@ -292,14 +309,22 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
       let rs1 = data.decoded_instr.rs1;
       let rs2 = data.decoded_instr.rs2;
 
-      let rs1_val = gpr_regfile.read_rs1 (rs1);
-      let rs2_val = gpr_regfile.read_rs2 (rs2);
+      let rs1_val = data.rs1_val;
+      let rs2_val = data.rs2_val;
 
+`ifdef DEDUPLICATE_BYPASS
+      match { .busy1a, .rs1a } <- bypass_wrapper_1a.func (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } <- bypass_wrapper_1b.func (bypass_from_stage2, rs1, rs1a);
+
+      match { .busy2a, .rs2a } <- bypass_wrapper_2a.func (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } <- bypass_wrapper_2b.func (bypass_from_stage2, rs2, rs2a);
+`else
       match { .busy1a, .rs1a } = fn_gpr_bypass (bypass_from_stage3, rs1, rs1_val);
       match { .busy1b, .rs1b } = fn_gpr_bypass (bypass_from_stage2, rs1, rs1a);
 
       match { .busy2a, .rs2a } = fn_gpr_bypass (bypass_from_stage3, rs2, rs2_val);
       match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
+`endif
 
       let rs1c = rs1b;
       let rs2c = rs2b;
