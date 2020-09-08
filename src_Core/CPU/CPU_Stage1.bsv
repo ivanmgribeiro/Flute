@@ -106,6 +106,10 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    Reg #(WordXL) rg_rs2_val <- mkRegU;
    Reg #(Bool) rg_rs1_busy <- mkReg (False);
    Reg #(Bool) rg_rs2_busy <- mkReg (False);
+`ifdef DELAY_REGFILE_READ
+   Reg #(Bool) rg_read_rs1_from_regfile <- mkReg (True);
+   Reg #(Bool) rg_read_rs2_from_regfile <- mkReg (True);
+`endif
 
    Wire #(RegName) dw_rs1 <- mkDWire (0);
    Wire #(RegName) dw_rs2 <- mkDWire (0);
@@ -130,11 +134,23 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    let funct3         = decoded_instr.funct3;
 
 `ifdef NEW_BYPASS
+`ifdef DELAY_REGFILE_READ
+   let rs1 = decoded_instr.rs1;
+   let rs1_val_from_regfile = gpr_regfile.read_rs1 (rs1);
+   Bool rs1_busy = rg_rs1_busy;
+   Word rs1_val_bypassed = rg_read_rs1_from_regfile ? rs1_val_from_regfile : rg_rs1_val;
+
+   let rs2 = decoded_instr.rs2;
+   let rs2_val_from_regfile = gpr_regfile.read_rs2 (rs2);
+   Bool rs2_busy = rg_rs2_busy;
+   Word rs2_val_bypassed = rg_read_rs2_from_regfile ? rs2_val_from_regfile : rg_rs2_val;
+`else
    Bool rs1_busy = rg_rs1_busy;
    Word rs1_val_bypassed = rg_rs1_val;
 
    Bool rs2_busy = rg_rs2_busy;
    Word rs2_val_bypassed = rg_rs2_val;
+`endif
 `else
    // Register rs1 read and bypass
    let rs1 = decoded_instr.rs1;
@@ -224,11 +240,16 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
       let rs1 = rg_stage_input.decoded_instr.rs1;
       let rs2 = rg_stage_input.decoded_instr.rs2;
 
+`ifdef DELAY_REGFILE_READ
+      let rs1_val = rs1_val_from_regfile;
+      let rs2_val = rs2_val_from_regfile;
+`else
       // TODO this might not be right, since the values we read from the
       // GPR on enq might get overwritten by bypass logic
       // however, it should be right
       let rs1_val = rg_rs1_val;
       let rs2_val = rg_rs2_val;
+`endif
 
 `ifdef DEDUPLICATE_BYPASS
       match { .busy1a, .rs1a } <- bypass_wrapper_1a.func (bypass_from_stage3, rs1, rs1_val);
@@ -309,9 +330,78 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
       let rs1 = data.decoded_instr.rs1;
       let rs2 = data.decoded_instr.rs2;
 
+`ifdef DELAY_REGFILE_READ
+      let rs1_val = ?;
+      let rs2_val = ?;
+`else
       let rs1_val = data.rs1_val;
       let rs2_val = data.rs2_val;
+`endif
 
+`ifdef DELAY_REGFILE_READ
+      // explicitly bypass stuff here, since we need to know explicitly whether w
+      // forwarded rs1 and rs2 values
+
+      // register rs1
+      let busy1a = False;
+      let busy1b = False;
+      let rs1a = rs1_val;
+      let read_rs1_from_regfile = True;
+      if (rs1 == bypass_from_stage3.rd) begin
+         if (bypass_from_stage3.bypass_state == BYPASS_RD) begin
+            busy1a = True;
+            read_rs1_from_regfile = False;
+         end else if (bypass_from_stage3.bypass_state == BYPASS_RD_RDVAL) begin
+            rs1a = bypass_from_stage3.rd_val;
+            read_rs1_from_regfile = False;
+         end
+      end
+
+      let rs1b = rs1a;
+      if (rs1 == bypass_from_stage2.rd) begin
+         if (bypass_from_stage2.bypass_state == BYPASS_RD) begin
+            busy1b = True;
+            read_rs1_from_regfile = False;
+         end else if (bypass_from_stage2.bypass_state == BYPASS_RD_RDVAL) begin
+            rs1b = bypass_from_stage2.rd_val;
+            read_rs1_from_regfile = False;
+         end
+      end
+
+      if (rs1 == 0) begin
+         read_rs1_from_regfile = False;
+      end
+
+      // register rs2
+      let busy2a = False;
+      let busy2b = False;
+      let rs2a = rs2_val;
+      let read_rs2_from_regfile = True;
+      if (rs2 == bypass_from_stage3.rd) begin
+         if (bypass_from_stage3.bypass_state == BYPASS_RD) begin
+            busy2a = True;
+            read_rs2_from_regfile = False;
+         end else if (bypass_from_stage3.bypass_state == BYPASS_RD_RDVAL) begin
+            rs2a = bypass_from_stage3.rd_val;
+            read_rs2_from_regfile = False;
+         end
+      end
+
+      let rs2b = rs2a;
+      if (rs2 == bypass_from_stage2.rd) begin
+         if (bypass_from_stage2.bypass_state == BYPASS_RD) begin
+            busy2b = True;
+            read_rs2_from_regfile = False;
+         end else if (bypass_from_stage2.bypass_state == BYPASS_RD_RDVAL) begin
+            rs2b = bypass_from_stage2.rd_val;
+            read_rs2_from_regfile = False;
+         end
+      end
+
+      if (rs2 == 0) begin
+         read_rs2_from_regfile = False;
+      end
+`else
 `ifdef DEDUPLICATE_BYPASS
       match { .busy1a, .rs1a } <- bypass_wrapper_1a.func (bypass_from_stage3, rs1, rs1_val);
       match { .busy1b, .rs1b } <- bypass_wrapper_1b.func (bypass_from_stage2, rs1, rs1a);
@@ -324,6 +414,7 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 
       match { .busy2a, .rs2a } = fn_gpr_bypass (bypass_from_stage3, rs2, rs2_val);
       match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
+`endif
 `endif
 
       let rs1c = rs1b;
@@ -338,18 +429,30 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
             //if (rs1 == rg_stage_input.decoded_instr.rd) begin
             if (rs1 == fv_out.data_to_stage2.rd) begin
                rs1c = fv_out.data_to_stage2.val1;
+`ifdef DELAY_REGFILE_READ
+               read_rs1_from_regfile = False;
+`endif
             end
             //if (rs2 == rg_stage_input.decoded_instr.rd) begin
             if (rs2 == fv_out.data_to_stage2.rd) begin
                rs2c = fv_out.data_to_stage2.val1;
+`ifdef DELAY_REGFILE_READ
+               read_rs2_from_regfile = False;
+`endif
             end
          end
          else begin
             if (rs1 == rg_stage_input.decoded_instr.rd) begin
                busy1c = True;
+`ifdef DELAY_REGFILE_READ
+               read_rs1_from_regfile = False;
+`endif
             end
             if (rs2 == rg_stage_input.decoded_instr.rd) begin
                busy2c = True;
+`ifdef DELAY_REGFILE_READ
+               read_rs2_from_regfile = False;
+`endif
             end
          end
       end
@@ -358,6 +461,10 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
       rg_rs2_val <= (rs2 != 0) ? rs2c : 0;
       rg_rs1_busy <= busy1a || busy1b || busy1c;
       rg_rs2_busy <= busy2a || busy2b || busy2c;
+`ifdef DELAY_REGFILE_READ
+      rg_read_rs1_from_regfile <= read_rs1_from_regfile;
+      rg_read_rs2_from_regfile <= read_rs2_from_regfile;
+`endif
 `endif
 
       rg_stage_input <= data;

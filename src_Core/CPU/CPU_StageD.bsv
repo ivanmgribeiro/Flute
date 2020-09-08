@@ -86,8 +86,21 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
    Instr instr = rg_data.instr;
 
    // If we are using NEW_BYPASS, the instruction decompression happens in StageF
-`ifndef NEW_BYPASS
+   // if we are using NEW_BYPASS and DELAY_REGFILE_READ, decompression happens here
 `ifdef ISA_C
+`ifdef NEW_BYPASS
+`ifdef DELAY_REGFILE_READ
+   Instr_C instr_C = instr [15:0];
+
+   let decode_c_wrapper <- mkDecodeC;
+   rule assign_decode_c_inputs;
+      decode_c_wrapper.put_inputs(misa, xl, instr_C);
+   endrule
+
+   if (! rg_data.is_i32_not_i16)
+      instr = decode_c_wrapper.get_outputs;
+`endif
+`else
    Instr_C instr_C = instr [15:0];
 
    let decode_c_wrapper <- mkDecodeC;
@@ -115,11 +128,13 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
    endrule
 
 `ifdef NEW_BYPASS
+`ifndef DELAY_REGFILE_READ
    let rs1 = rg_data.rs1;
    let rs2 = rg_data.rs2;
 
    let rs1_val = gpr_regfile.read_rs1 (rs1);
    let rs2_val = gpr_regfile.read_rs2 (rs2);
+`endif
 `endif
 
    // ----------------
@@ -148,8 +163,10 @@ module mkCPU_StageD #(Bit #(4)  verbosity, MISA misa)
 							       tval:           rg_data.tval,
 							       instr:          instr,
 `ifdef NEW_BYPASS
+`ifndef DELAY_REGFILE_READ
                                                                rs1_val: rs1_val,
                                                                rs2_val: rs2_val,
+`endif
 `endif
 `ifdef ISA_C
 `ifdef NEW_BYPASS

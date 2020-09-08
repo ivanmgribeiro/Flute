@@ -249,8 +249,10 @@ typedef struct {
    WordXL     tval;               // Trap value; can be different from PC, with 'C' extension
    Instr      instr;              // Valid if no exception
 `ifdef NEW_BYPASS
+`ifndef DELAY_REGFILE_READ
    RegName    rs1;
    RegName    rs2;
+`endif
 `endif
    WordXL     pred_pc;            // Predicted next pc
    } Data_StageF_to_StageD
@@ -314,8 +316,10 @@ typedef struct {
 
    Instr          instr;              // Valid if no exception
 `ifdef NEW_BYPASS
+`ifndef DELAY_REGFILE_READ
    WordXL         rs1_val;
    WordXL         rs2_val;
+`endif
 `endif
    Instr_C        instr_C;            // Valid if no exception; original compressed instruction
    WordXL         pred_pc;            // Predicted next pc
