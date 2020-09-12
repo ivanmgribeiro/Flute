@@ -50,6 +50,8 @@ import CHERICap :: *;
 import CHERICC_Fat :: *;
 `endif
 
+import CPU_Stage1_syn :: *;
+
 // ================================================================
 // Interface
 
@@ -209,21 +211,38 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 				mstatus        : csr_regfile.read_mstatus,
 				misa           : csr_regfile.read_misa };
 
-   let alu_outputs = fv_ALU (alu_inputs);
+   let alu_syn <- mk_ALU (alu_inputs);
+   let alu_outputs = alu_syn.alu_outputs;
 
-   let fall_through_pc = getPC(rg_pcc) + (rg_stage_input.is_i32_not_i16 ? 4 : 2);
+   let stage1_syn <- mkCPU_Stage1_syn;
+   let stage1_outputs = stage1_syn.stage1_outputs (
+                                                   rg_full,
+                                                   cur_epoch,
+                                                   cur_priv,
+                                                   rg_stage_input,
+                                                   rg_pcc,
+`ifdef RVFI
+                                                   rs1_val_bypassed,
+                                                   rs1_val_bypassed,
+`endif
+                                                   rs1_busy,
+                                                   rs2_busy,
+`ifdef ISA_F
+                                                   frs1_busy,
+                                                   frs2_busy,
+                                                   frs3_busy,
+`endif
+                                                   alu_outputs
+                                                  );
 
-   let next_pc_local = ((alu_outputs.control == CONTROL_BRANCH)
-		 ? alu_outputs.addr
-		 : fall_through_pc);
+   let fall_through_pc = alu_outputs.cf_info.fallthru_PC;
 
-   let next_pcc_local = ((alu_outputs.control == CONTROL_CAPBRANCH)
-     ? alu_outputs.pcc
-     : setPC(rg_pcc, next_pc_local).value); //TODO unrepresentable?
 
-   let redirect = (alu_outputs.control == CONTROL_CAPBRANCH)
-     ? (getAddr(toCapPipe(alu_outputs.pcc)) != rg_stage_input.pred_fetch_addr)
-     : (next_pc_local != rg_stage_input.pred_fetch_addr - getPCCBase(rg_pcc));
+
+`ifdef ISA_CHERI
+   let next_pcc_local = stage1_outputs.next_pcc;
+`endif
+
 
 `ifdef RVFI
    CapReg tmp_val2 = cast(alu_outputs.cap_val2);
@@ -296,7 +315,9 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
                                                check_authority    : alu_outputs.check_authority,
                                                check_authority_idx: alu_outputs.check_authority_idx,
                                                check_address_low  : alu_outputs.check_address_low,
+                                               authority_base     : alu_outputs.authority_base,
                                                check_address_high : alu_outputs.check_address_high,
+                                               authority_top      : alu_outputs.authority_top,
                                                check_exact_enable : alu_outputs.check_exact_enable,
                                                check_exact_success: alu_outputs.check_exact_success,
 `endif
@@ -315,160 +336,7 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    // ----------------
    // Combinational output function
 
-   function Output_Stage1 fv_out;
-      Output_Stage1 output_stage1 = ?;
-
-      // This stage is empty
-      if (! rg_full) begin
-	 output_stage1.ostatus = OSTATUS_EMPTY;
-      end
-
-      // Wrong branch-prediction epoch: discard instruction (convert into a NOOP)
-      else if (rg_stage_input.epoch != cur_epoch) begin
-	 output_stage1.ostatus = OSTATUS_PIPE;
-	 output_stage1.control = CONTROL_DISCARD;
-
-	 // For debugging only
-	 let data_to_stage2 = Data_Stage1_to_Stage2 {
-`ifdef ISA_CHERI
-                                                     pcc:       rg_pcc,
-`else
-                                                     pc:        rg_stage_input.pc,
-`endif
-						     instr:     rg_stage_input.instr,
-`ifdef RVFI_DII
-                                                     instr_seq: rg_stage_input.instr_seq,
-`endif
-						     op_stage2: OP_Stage2_ALU,
-						     rd:        0,
-						     addr:      ?,
-						     val1:      ?,
-						     val2:      ?,
-						     val1_fast: ?,
-						     val2_fast: ?,
-`ifdef ISA_F
-						     fval1           : ?,
-						     fval2           : ?,
-						     fval3           : ?,
-						     rd_in_fpr       : ?,
-					             rs_frm_fpr      : ?,
-					             val1_frm_gpr    : ?,
-						     rounding_mode   : ?,
-`endif
-                                                     mem_unsigned  : ?,
-                                                     mem_width_code: ?,
-`ifdef ISA_CHERI
-                                               mem_allow_cap      : False,
-                                               check_enable       : False,
-                                               check_inclusive    : ?,
-                                               check_authority    : ?,
-                                               check_authority_idx: ?,
-                                               check_address_low  : ?,
-                                               check_address_high : ?,
-`endif
-`ifdef INCLUDE_TANDEM_VERIF
-						     trace_data: alu_outputs.trace_data,
-`endif
-`ifdef RVFI
-                                                     info_RVFI_s1 : ?,
-`endif
-						     priv:      cur_priv
-						     };
-
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-`ifdef ISA_CHERI
-      else if (isValid(fetch_exc)) begin
-	 output_stage1.ostatus   = OSTATUS_NONPIPE;
-	 output_stage1.control   = CONTROL_TRAP;
-	 output_stage1.trap_info = Trap_Info_Pipe {
-                exc_code: exc_code_CHERI,
-                cheri_exc_code : fetch_exc.Valid,
-                cheri_exc_reg : {1, scr_addr_PCC},
-                epcc: rg_pcc,
-                tval: rg_stage_input.tval};
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-`endif
-
-      // Stall if bypass pending for GPR rs1 or rs2
-      else if (rs1_busy || rs2_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
-
-`ifdef ISA_F
-      // Stall if bypass pending for FPR rs1, rs2 or rs3
-      else if (frs1_busy || frs2_busy || frs3_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
-`endif
-
-      // Trap on fetch-exception
-      else if (rg_stage_input.exc) begin
-	 output_stage1.ostatus   = OSTATUS_NONPIPE;
-	 output_stage1.control   = CONTROL_TRAP;
-	 output_stage1.trap_info = Trap_Info_Pipe {
-                                              epcc: rg_pcc,
-					      exc_code: rg_stage_input.exc_code,
-                                              cheri_exc_code: ?,
-                                              cheri_exc_reg: ?,
-					      tval:     rg_stage_input.tval};
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-      // ALU outputs: pipe (straight/branch)
-      // and non-pipe (CSRR_W, CSRR_S_or_C, FENCE.I, FENCE, SFENCE_VMA, xRET, WFI, TRAP)
-      else begin
-	 let ostatus = (  (   (alu_outputs.control == CONTROL_STRAIGHT)
-			   || (alu_outputs.control == CONTROL_BRANCH)
-			   || (alu_outputs.control == CONTROL_CAPBRANCH))
-			? OSTATUS_PIPE
-			: OSTATUS_NONPIPE);
-
-	 // Compute MTVAL in case of traps
-	 let tval = 0;
-	 if (alu_outputs.exc_code == exc_code_ILLEGAL_INSTRUCTION) begin
-	    // The instruction
-`ifdef ISA_C
-	    tval = (rg_stage_input.is_i32_not_i16
-		    ? zeroExtend (rg_stage_input.instr)
-		    : zeroExtend (rg_stage_input.instr_C));
-`else
-	    tval = zeroExtend (rg_stage_input.instr);
-`endif
-	 end
-	 else if (alu_outputs.exc_code == exc_code_INSTR_ADDR_MISALIGNED)
-	    tval = alu_outputs.addr;                           // The branch target pc
-	 else if (alu_outputs.exc_code == exc_code_BREAKPOINT)
-`ifdef ISA_CHERI
-	    tval = getPC(rg_pcc);                   // The faulting virtual address
-`else
-	    tval = rg_stage_input.pc;                          // The faulting virtual address
-`endif
-
-	 let trap_info = Trap_Info_Pipe {
-                                    epcc: rg_pcc,
-				    exc_code: alu_outputs.exc_code,
-                                    cheri_exc_code: alu_outputs.cheri_exc_code,
-                                    cheri_exc_reg: alu_outputs.cheri_exc_reg,
-				    tval:     tval};
-
-	 output_stage1.ostatus        = ostatus;
-	 output_stage1.control        = alu_outputs.control;
-	 output_stage1.trap_info      = trap_info;
-	 output_stage1.redirect       = redirect;
-`ifdef ISA_CHERI
-         output_stage1.next_pcc       = next_pcc_local;
-`else
-	 output_stage1.next_pc        = next_pc_local;
-`endif
-	 output_stage1.cf_info        = alu_outputs.cf_info;
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-      return output_stage1;
-   endfunction: fv_out
+   // replaced with code above instantiating stage1_syn
 
    (* fire_when_enabled, no_implicit_conditions *)
    rule commit_pcc;
@@ -486,7 +354,7 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 
    // ---- Output
    method Output_Stage1 out;
-      return fv_out;
+      return stage1_outputs;
    endmethod
 
    method Action deq ();

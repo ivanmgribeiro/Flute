@@ -99,7 +99,6 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
    Reg #(Epoch)      rg_epoch <- mkReg (0);               // Toggles on redirections
    Reg #(Priv_Mode)  rg_priv  <- mkRegU;
 
-   Branch_Predictor_IFC branch_predictor <- mkBranch_Predictor;
 
    // ----------------------------------------------------------------
    // BEHAVIOR
@@ -109,14 +108,17 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
       rg_full  <= False;
       rg_epoch <= 0;
 `ifdef RVFI_DII
-      branch_predictor.reset();
 `endif
       f_reset_rsps.enq (?);
    endrule
 
+`ifdef ISA_CHERI
+`ifndef Near_Mem_Avalon
    rule rl_commit;
       imem.commit; // always commit to imem, meaning OOB reads can happen over instr interface
    endrule
+`endif
+`endif
 
    // ----------------
    // Combinational output function
@@ -127,7 +129,7 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
 `else
       let imem_instr = imem.instr;
 `endif
-      let pred_fetch_addr = branch_predictor.predict_rsp (imem.is_i32_not_i16, imem_instr);
+      let pred_fetch_addr = zeroExtend (imem.pc + (imem.is_i32_not_i16 ? 4 : 2));
       let d = Data_StageF_to_StageD {fetch_addr:      imem.pc,
 `ifdef ISA_CHERI
                                      refresh_pcc:     rg_refresh_pcc,
@@ -192,7 +194,6 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
                                                                        , next_seq
 `endif
                                                                        );
-      branch_predictor.predict_req (fetch_addr);    // TODO: ASID.VA vs PA?
 
       rg_epoch <= epoch;
       rg_priv  <= priv;
@@ -205,7 +206,6 @@ module mkCPU_StageF #(Bit #(4)  verbosity,
 			   Bool     is_i32_not_i16,
 			   Instr    instr,
 			   CF_Info  cf_info);
-      branch_predictor.bp_train (pc, is_i32_not_i16, instr, cf_info);
    endmethod
 
    method Action set_full (Bool full);

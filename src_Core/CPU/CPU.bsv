@@ -48,7 +48,9 @@ import ConfigReg    :: *;
 
 import GetPut_Aux :: *;
 import Semi_FIFOF :: *;
+`ifndef Near_Mem_Avalon
 import AXI4       :: *;
+`endif
 
 `ifdef INCLUDE_DMEM_SLAVE
 import AXI4Lite   :: *;
@@ -96,6 +98,10 @@ import Near_Mem_Caches :: *;
 
 `ifdef Near_Mem_TCM
 import Near_Mem_TCM :: *;
+`endif
+
+`ifdef Near_Mem_Avalon
+import Near_Mem_Avalon :: *;
 `endif
 
 `ifdef INCLUDE_GDB_CONTROL
@@ -151,7 +157,22 @@ endfunction
 // ================================================================
 
 (* synthesize *)
+`ifdef Near_Mem_Avalon
+module mkCPU
+   #(Bit #(XLEN) avm_instr_readdata,
+     Bool        avm_instr_waitrequest,
+     Bool        avm_instr_readdatavalid,
+     Bit #(2)    avm_instr_response,
+
+     Bit #(XLEN) avm_data_readdata,
+     Bool        avm_data_waitrequest,
+     Bool        avm_data_readdatavalid,
+     Bit #(2)    avm_data_response
+   )
+   (CPU_IFC);
+`else
 module mkCPU (CPU_IFC);
+`endif
 
    // ----------------
    // System address map and pc reset value
@@ -755,6 +776,22 @@ module mkCPU (CPU_IFC);
    endrule
 `endif
 
+`ifdef Near_Mem_Avalon
+   (* no_implicit_conditions, fire_when_enabled *)
+   rule rl_mem_values;
+      near_mem.imem_master.in(Avalon_Inputs {avm_readdata      : avm_instr_readdata,
+                                             avm_waitrequest   : avm_instr_waitrequest,
+                                             avm_readdatavalid : avm_instr_readdatavalid,
+                                             avm_response      : avm_instr_response
+      });
+      near_mem.dmem_master.in(Avalon_Inputs {avm_readdata      : avm_data_readdata,
+                                             avm_waitrequest   : avm_data_waitrequest,
+                                             avm_readdatavalid : avm_data_readdatavalid,
+                                             avm_response      : avm_data_response
+      });
+   endrule
+`endif
+
    // ================================================================
    // PIPELINE BEHAVIOR (excluding nonpipe special instructions and exceptions)
 
@@ -766,9 +803,11 @@ module mkCPU (CPU_IFC);
    // instr, since the fetch may need the just-written CSR value.
 
 `ifdef ISA_CHERI
+`ifndef Near_Mem_Avalon
    rule rl_dmem_commit (stage2.out.check_success);
        near_mem.dmem.commit;
    endrule
+`endif
 `endif
 
 `ifndef RVFI_DII
@@ -1647,7 +1686,9 @@ module mkCPU (CPU_IFC);
       rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
 `endif
 
+`ifndef Near_Mem_Avalon
       near_mem.server_fence_i.request.put (?);
+`endif
       rg_state <= CPU_FENCE_I;
 
       // Accounting
@@ -1678,7 +1719,9 @@ module mkCPU (CPU_IFC);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_finish_FENCE_I", mcycle);
 
       // Await mem system FENCE.I completion
+`ifndef Near_Mem_Avalon
       let dummy <- near_mem.server_fence_i.response.get;
+`endif
 
       // Accounting
       csr_regfile.csr_minstret_incr;
@@ -1724,7 +1767,9 @@ module mkCPU (CPU_IFC);
       rg_next_seq <= stage1.out.data_to_stage2.instr_seq + 1;
 `endif
 
+`ifndef Near_Mem_Avalon
       near_mem.server_fence.request.put (?);
+`endif
       rg_state <= CPU_FENCE;
 
       // Accounting
@@ -1754,7 +1799,9 @@ module mkCPU (CPU_IFC);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_finish_FENCE", mcycle);
 
       // Await mem system FENCE completion
+`ifndef Near_Mem_Avalon
       let dummy <- near_mem.server_fence.response.get;
+`endif
 
       // Accounting
       csr_regfile.csr_minstret_incr;
@@ -1990,7 +2037,9 @@ module mkCPU (CPU_IFC);
       rg_state <= CPU_GDB_PAUSING;
 
       // Flush both caches -- using the same interface as that used by FENCE_I
+`ifndef Near_Mem_Avalon
       near_mem.server_fence_i.request.put (?);
+`endif
 
       // Notify debugger that we've halted
       f_run_halt_rsps.enq (False);
@@ -2001,7 +2050,9 @@ module mkCPU (CPU_IFC);
    // on entering CPU_GDB_PAUSING state
 
    rule rl_BREAK_cache_flush_finish ((rg_state == CPU_GDB_PAUSING) && f_run_halt_reqs_empty);
+`ifndef Near_Mem_Avalon
       let ack <- near_mem.server_fence_i.response.get;
+`endif
       rg_state <= CPU_DEBUG_MODE;
 
       // Notify debugger that we've halted
@@ -2100,7 +2151,9 @@ module mkCPU (CPU_IFC);
       rg_step_count <= 0;
 
       // Flush both caches -- using the same interface as that used by FENCE_I
+`ifndef Near_Mem_Avalon
       near_mem.server_fence_i.request.put (?);
+`endif
 
       // Accounting: none (instruction is abandoned)
    endrule: rl_stage1_stop
@@ -2306,11 +2359,30 @@ module mkCPU (CPU_IFC);
    // ----------------
    // SoC fabric connections
 
+`ifdef Near_Mem_Avalon
+   // IMem to avalon
+   method Bit #(XLEN)         avm_instr_address    = near_mem.imem_master.out.avm_address;
+   method Bool                avm_instr_read       = near_mem.imem_master.out.avm_read;
+   method Bool                avm_instr_write      = near_mem.imem_master.out.avm_write;
+   method Bit #(XLEN)         avm_instr_writedata  = near_mem.imem_master.out.avm_writedata;
+   method Bit #(Bytes_per_WordXL) avm_instr_byteenable = near_mem.imem_master.out.avm_byteenable;
+`else
    // IMem to fabric master interface
    interface  imem_master = near_mem.imem_master;
+`endif
 
+`ifdef Near_Mem_Avalon
+   // DMem to avalon
+   method Bit #(XLEN)         avm_data_address    = near_mem.dmem_master.out.avm_address;
+   method Bool                avm_data_read       = near_mem.dmem_master.out.avm_read;
+   method Bool                avm_data_write      = near_mem.dmem_master.out.avm_write;
+   method Bit #(XLEN)         avm_data_writedata  = near_mem.dmem_master.out.avm_writedata;
+   method Bit #(Bytes_per_WordXL) avm_data_byteenable = near_mem.dmem_master.out.avm_byteenable;
+`else
    // DMem to fabric master interface
-   interface Near_Mem_Fabric_IFC  mem_master = near_mem.mem_master;
+   //interface Near_Mem_Fabric_IFC  mem_master = near_mem.mem_master;
+   interface  dmem_master = near_mem.mem_master;
+`endif
 
    // ----------------------------------------------------------------
    // Optional AXI4-Lite D-cache slave interface
@@ -2322,7 +2394,9 @@ module mkCPU (CPU_IFC);
    // ----------------
    // Interface to 'coherent DMA' port of optional L2 cache
 
+`ifndef Near_Mem_Avalon
    interface AXI4_Slave_IFC dma_server = near_mem.dma_server;
+`endif
 
    // ----------------------------------------------------------------
    // External interrupts
@@ -2407,6 +2481,7 @@ module mkCPU (CPU_IFC);
    method Bit #(64) mv_tohost_value = near_mem.mv_tohost_value;
 `endif
 
+`ifndef Near_Mem_Avalon
    // Inform core that DDR4 has been initialized and is ready to accept requests
    method Action ma_ddr4_ready;
       near_mem.ma_ddr4_ready;
@@ -2416,6 +2491,7 @@ module mkCPU (CPU_IFC);
    method Bit #(8) mv_status;
       return near_mem.mv_status;
    endmethod
+`endif
 
 endmodule: mkCPU
 

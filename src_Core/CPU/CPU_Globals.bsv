@@ -588,6 +588,8 @@ typedef struct {
    // Bounds exceptions
    CapPipe    check_authority;
    Bit#(6)    check_authority_idx;
+   Bit #(XLEN) authority_base;
+   Bit #(TAdd #(XLEN, 1)) authority_top;
    Bit#(XLEN)     check_address_low;
    Bit#(TAdd#(XLEN,1))     check_address_high;
    Bool       check_enable;
