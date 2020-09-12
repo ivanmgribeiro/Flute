@@ -50,6 +50,8 @@ import CHERICap :: *;
 import CHERICC_Fat :: *;
 `endif
 
+import CPU_Stage1_syn :: *;
+
 // ================================================================
 // Interface
 
@@ -104,6 +106,22 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 
    Reg #(Bool)                  rg_full        <- mkReg (False);
    Reg #(Data_StageD_to_Stage1) rg_stage_input <- mkRegU;
+`ifdef NEW_BYPASS
+`ifdef ISA_CHERI
+   Reg #(CapPipe) rg_rs1_val <- mkConfigRegU;
+   Reg #(CapPipe) rg_rs2_val <- mkConfigRegU;
+`else
+   Reg #(WordXL) rg_rs1_val <- mkConfigRegU;
+   Reg #(WordXL) rg_rs2_val <- mkConfigRegU;
+`endif // ISA_CHERI
+   Reg #(Bool) rg_read_rs1_from_regfile <- mkConfigReg (False);
+   Reg #(Bool) rg_read_rs2_from_regfile <- mkConfigReg (False);
+   Reg #(Bool) rg_rs1_busy <- mkConfigReg (False);
+   Reg #(Bool) rg_rs2_busy <- mkConfigReg (False);
+
+   Wire #(RegName) dw_rs1 <- mkDWire (0);
+   Wire #(RegName) dw_rs2 <- mkDWire (0);
+`endif // NEW_BYPASS
 
    MISA misa   = csr_regfile.read_misa;
    Bit #(2) xl = ((xlen == 32) ? misa_mxl_32 : misa_mxl_64);
@@ -123,6 +141,17 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    let decoded_instr  = rg_stage_input.decoded_instr;
    let funct3         = decoded_instr.funct3;
 
+`ifdef NEW_BYPASS
+   let rs1 = decoded_instr.rs1;
+   let rs1_val_from_regfile = gpr_regfile.read_rs1 (rs1);
+   Bool rs1_busy = rg_rs1_busy;
+   let rs1_val_bypassed = rg_read_rs1_from_regfile ? rs1_val_from_regfile : rg_rs1_val;
+
+   let rs2 = decoded_instr.rs2;
+   let rs2_val_from_regfile = gpr_regfile.read_rs2 (rs2);
+   Bool rs2_busy = rg_rs2_busy;
+   let rs2_val_bypassed = rg_read_rs2_from_regfile ? rs2_val_from_regfile : rg_rs2_val;
+`else // not NEW_BYPASS
    // Register rs1 read and bypass
    let rs1 = decoded_instr.rs1;
    let rs1_val = gpr_regfile.read_rs1 (rs1);
@@ -170,13 +199,13 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    Bool frs3_busy = (fbusy3a || fbusy3b);
    WordFL frs3_val_bypassed = frs3b;
 `endif
+`endif // not NEW_BYPASS
 
    // ALU function
    let alu_inputs = ALU_Inputs {cur_priv       : cur_priv,
 `ifdef ISA_CHERI
 				pcc            : rg_pcc,
 				ddc            : ddc,
-				pc             : getPC(rg_pcc),
 `else
 				pc             : rg_stage_input.pc,
 `endif
@@ -209,266 +238,88 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 				mstatus        : csr_regfile.read_mstatus,
 				misa           : csr_regfile.read_misa };
 
-   let alu_outputs = fv_ALU (alu_inputs);
+   let alu_syn <- mk_ALU (alu_inputs);
+   let alu_outputs = alu_syn.alu_outputs;
 
-   let fall_through_pc = getPC(rg_pcc) + (rg_stage_input.is_i32_not_i16 ? 4 : 2);
+`ifdef NEW_BYPASS
+`ifdef DEDUPLICATE_BYPASS
+   let bypass_wrapper_1a <- mkUniqueWrapper3(fn_gpr_bypass);
+   let bypass_wrapper_2a <- mkUniqueWrapper3(fn_gpr_bypass);
+   let bypass_wrapper_1b <- mkUniqueWrapper3(fn_gpr_bypass);
+   let bypass_wrapper_2b <- mkUniqueWrapper3(fn_gpr_bypass);
+`endif
 
-   let next_pc_local = ((alu_outputs.control == CONTROL_BRANCH)
-		 ? alu_outputs.addr
-		 : fall_through_pc);
+   Reg #(Int #(64)) stalls <- mkReg (0);
+   rule rl_stage1_forwarding (rg_rs1_busy || rg_rs2_busy);
+      if (verbosity > 0) begin
+         $display("stage1 stalled ", fshow(stalls));
+         stalls <= stalls + 1;
+      end
+      let decoded_instr = rg_stage_input.decoded_instr;
+      let rs1 = rg_stage_input.decoded_instr.rs1;
+      let rs2 = rg_stage_input.decoded_instr.rs2;
 
-   let next_pcc_local = ((alu_outputs.control == CONTROL_CAPBRANCH)
-     ? alu_outputs.pcc
-     : setPC(rg_pcc, next_pc_local).value); //TODO unrepresentable?
+`ifdef DELAY_REGFILE_READ
+      let rs1_val = rs1_val_from_regfile;
+      let rs2_val = rs2_val_from_regfile;
+`else
+      let rs1_val = rg_rs1_val;
+      let rs2_val = rg_rs2_val;
+`endif
 
-   let redirect = (alu_outputs.control == CONTROL_CAPBRANCH)
-     ? (getAddr(toCapPipe(alu_outputs.pcc)) != rg_stage_input.pred_fetch_addr)
-     : (next_pc_local != rg_stage_input.pred_fetch_addr - getPCCBase(rg_pcc));
+`ifdef DEDUPLICATE_BYPASS
+      match { .busy1a, .rs1a } <- bypass_wrapper_1a.func (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } <- bypass_wrapper_1b.func (bypass_from_stage2, rs1, rs1a);
 
+      match { .busy2a, .rs2a } <- bypass_wrapper_2a.func (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } <- bypass_wrapper_2b.func (bypass_from_stage2, rs2, rs2a);
+`else
+      match { .busy1a, .rs1a } = fn_gpr_bypass (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } = fn_gpr_bypass (bypass_from_stage2, rs1, rs1a);
+
+      match { .busy2a, .rs2a } = fn_gpr_bypass (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
+`endif
+
+`ifdef ISA_CHERI
+      rg_rs1_val <= (rs1 != 0) ? rs1b : nullCap;
+      rg_rs2_val <= (rs2 != 0) ? rs2b : nullCap;
+`else
+      rg_rs1_val <= (rs1 != 0) ? rs1b : 0;
+      rg_rs2_val <= (rs2 != 0) ? rs2b : 0;
+`endif
+      rg_rs1_busy <= busy1a || busy1b;
+      rg_rs2_busy <= busy2a || busy2b;
+   endrule
+`endif
+
+
+
+   let stage1_syn <- mkCPU_Stage1_syn;
+   let stage1_outputs = stage1_syn.stage1_outputs (
+                                                   rg_full,
+                                                   cur_epoch,
+                                                   cur_priv,
+                                                   rg_stage_input,
+                                                   rg_pcc,
 `ifdef RVFI
-   CapReg tmp_val2 = cast(alu_outputs.cap_val2);
-   CapMem cap_val2 = cast(tmp_val2);
-   let info_RVFI = Data_RVFI_Stage1 {
-                       instr:          rg_stage_input.instr,
-                       rs1_addr:       rs1,
-                       rs2_addr:       rs2,
-`ifdef ISA_CHERI
-                       rs1_data:       getAddr(rs1_val_bypassed),
-                       rs2_data:       getAddr(rs2_val_bypassed),
-`else
-                       rs1_data:       rs1_val_bypassed,
-                       rs2_data:       rs2_val_bypassed,
+                                                   rs1_val_bypassed,
+                                                   rs1_val_bypassed,
 `endif
-                       pc_rdata:       getPC(rg_pcc),
-                       pc_wdata:       getPC(next_pcc_local),
+                                                   rs1_busy,
+                                                   rs2_busy,
 `ifdef ISA_F
-                       mem_wdata:      alu_outputs.rs_frm_fpr ? alu_outputs.fval2 : truncate(cap_val2),
-`else
-                       mem_wdata:      truncate(cap_val2),
+                                                   frs1_busy,
+                                                   frs2_busy,
+                                                   frs3_busy,
 `endif
-                       rd_addr:        alu_outputs.rd,
-                       rd_alu:         (alu_outputs.op_stage2 == OP_Stage2_ALU),
-                       rd_wdata_alu:   alu_outputs.val1,
-                       mem_addr:       ((alu_outputs.op_stage2 == OP_Stage2_LD) || (alu_outputs.op_stage2 == OP_Stage2_ST)
-`ifdef ISA_A
-                                     || (alu_outputs.op_stage2 == OP_Stage2_AMO)
-`endif
-                                       ) ? alu_outputs.addr : 0};
-`endif
-
-   let data_to_stage2 = Data_Stage1_to_Stage2 {
-`ifdef ISA_CHERI
-                                               pcc:       rg_pcc,
-`else
-                                               pc:        rg_stage_input.pc,
-`endif
-					       instr         : rg_stage_input.instr,
-`ifdef RVFI_DII
-                                               instr_seq     : rg_stage_input.instr_seq,
-`endif
-					       op_stage2     : alu_outputs.op_stage2,
-					       rd            : alu_outputs.rd,
-					       addr          : alu_outputs.addr,
-                                               mem_width_code: alu_outputs.mem_width_code,
-                                               mem_unsigned  : alu_outputs.mem_unsigned,
-`ifdef ISA_CHERI
-                                               mem_allow_cap : alu_outputs.mem_allow_cap,
-                                               val1          : alu_outputs.val1_cap_not_int ? embed_cap(alu_outputs.cap_val1): embed_int(alu_outputs.val1),
-                                               val2          : alu_outputs.val2_cap_not_int ? embed_cap(alu_outputs.cap_val2): embed_int(alu_outputs.val2),
-`else
-                                               val1          : alu_outputs.val1,
-                                               val2          : alu_outputs.val2,
-`endif
-                                               val1_fast     : alu_outputs.val1_fast,
-                                               val2_fast     : alu_outputs.val2_fast,
-`ifdef ISA_F
-					       fval1         : alu_outputs.fval1,
-					       fval2         : alu_outputs.fval2,
-					       fval3         : alu_outputs.fval3,
-					       rd_in_fpr     : alu_outputs.rd_in_fpr,
-					       rs_frm_fpr    : alu_outputs.rs_frm_fpr,
-					       val1_frm_gpr  : alu_outputs.val1_frm_gpr,
-					       rounding_mode : alu_outputs.rm,
-`endif
-`ifdef ISA_CHERI
-                                               check_enable       : alu_outputs.check_enable,
-                                               check_inclusive    : alu_outputs.check_inclusive,
-                                               check_authority    : alu_outputs.check_authority,
-                                               check_authority_idx: alu_outputs.check_authority_idx,
-                                               check_address_low  : alu_outputs.check_address_low,
-                                               check_address_high : alu_outputs.check_address_high,
-                                               check_exact_enable : alu_outputs.check_exact_enable,
-                                               check_exact_success: alu_outputs.check_exact_success,
-`endif
-`ifdef INCLUDE_TANDEM_VERIF
-					       trace_data    : alu_outputs.trace_data,
-`endif
-`ifdef RVFI
-                                               info_RVFI_s1  : info_RVFI,
-`endif
-					       priv          : cur_priv };
-
-`ifdef ISA_CHERI
-   let fetch_exc = checkValid(rg_pcc, getTop(toCapPipe(rg_pcc)), rg_stage_input.is_i32_not_i16);
-`endif
+                                                   alu_outputs
+                                                  );
 
    // ----------------
    // Combinational output function
 
-   function Output_Stage1 fv_out;
-      Output_Stage1 output_stage1 = ?;
-
-      // This stage is empty
-      if (! rg_full) begin
-	 output_stage1.ostatus = OSTATUS_EMPTY;
-      end
-
-      // Wrong branch-prediction epoch: discard instruction (convert into a NOOP)
-      else if (rg_stage_input.epoch != cur_epoch) begin
-	 output_stage1.ostatus = OSTATUS_PIPE;
-	 output_stage1.control = CONTROL_DISCARD;
-
-	 // For debugging only
-	 let data_to_stage2 = Data_Stage1_to_Stage2 {
-`ifdef ISA_CHERI
-                                                     pcc:       rg_pcc,
-`else
-                                                     pc:        rg_stage_input.pc,
-`endif
-						     instr:     rg_stage_input.instr,
-`ifdef RVFI_DII
-                                                     instr_seq: rg_stage_input.instr_seq,
-`endif
-						     op_stage2: OP_Stage2_ALU,
-						     rd:        0,
-						     addr:      ?,
-						     val1:      ?,
-						     val2:      ?,
-						     val1_fast: ?,
-						     val2_fast: ?,
-`ifdef ISA_F
-						     fval1           : ?,
-						     fval2           : ?,
-						     fval3           : ?,
-						     rd_in_fpr       : ?,
-					             rs_frm_fpr      : ?,
-					             val1_frm_gpr    : ?,
-						     rounding_mode   : ?,
-`endif
-                                                     mem_unsigned  : ?,
-                                                     mem_width_code: ?,
-`ifdef ISA_CHERI
-                                               mem_allow_cap      : False,
-                                               check_enable       : False,
-                                               check_inclusive    : ?,
-                                               check_authority    : ?,
-                                               check_authority_idx: ?,
-                                               check_address_low  : ?,
-                                               check_address_high : ?,
-`endif
-`ifdef INCLUDE_TANDEM_VERIF
-						     trace_data: alu_outputs.trace_data,
-`endif
-`ifdef RVFI
-                                                     info_RVFI_s1 : ?,
-`endif
-						     priv:      cur_priv
-						     };
-
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-`ifdef ISA_CHERI
-      else if (isValid(fetch_exc)) begin
-	 output_stage1.ostatus   = OSTATUS_NONPIPE;
-	 output_stage1.control   = CONTROL_TRAP;
-	 output_stage1.trap_info = Trap_Info_Pipe {
-                exc_code: exc_code_CHERI,
-                cheri_exc_code : fetch_exc.Valid,
-                cheri_exc_reg : {1, scr_addr_PCC},
-                epcc: rg_pcc,
-                tval: rg_stage_input.tval};
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-`endif
-
-      // Stall if bypass pending for GPR rs1 or rs2
-      else if (rs1_busy || rs2_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
-
-`ifdef ISA_F
-      // Stall if bypass pending for FPR rs1, rs2 or rs3
-      else if (frs1_busy || frs2_busy || frs3_busy) begin
-	 output_stage1.ostatus = OSTATUS_BUSY;
-      end
-`endif
-
-      // Trap on fetch-exception
-      else if (rg_stage_input.exc) begin
-	 output_stage1.ostatus   = OSTATUS_NONPIPE;
-	 output_stage1.control   = CONTROL_TRAP;
-	 output_stage1.trap_info = Trap_Info_Pipe {
-                                              epcc: rg_pcc,
-					      exc_code: rg_stage_input.exc_code,
-                                              cheri_exc_code: ?,
-                                              cheri_exc_reg: ?,
-					      tval:     rg_stage_input.tval};
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-      // ALU outputs: pipe (straight/branch)
-      // and non-pipe (CSRR_W, CSRR_S_or_C, FENCE.I, FENCE, SFENCE_VMA, xRET, WFI, TRAP)
-      else begin
-	 let ostatus = (  (   (alu_outputs.control == CONTROL_STRAIGHT)
-			   || (alu_outputs.control == CONTROL_BRANCH)
-			   || (alu_outputs.control == CONTROL_CAPBRANCH))
-			? OSTATUS_PIPE
-			: OSTATUS_NONPIPE);
-
-	 // Compute MTVAL in case of traps
-	 let tval = 0;
-	 if (alu_outputs.exc_code == exc_code_ILLEGAL_INSTRUCTION) begin
-	    // The instruction
-`ifdef ISA_C
-	    tval = (rg_stage_input.is_i32_not_i16
-		    ? zeroExtend (rg_stage_input.instr)
-		    : zeroExtend (rg_stage_input.instr_C));
-`else
-	    tval = zeroExtend (rg_stage_input.instr);
-`endif
-	 end
-	 else if (alu_outputs.exc_code == exc_code_INSTR_ADDR_MISALIGNED)
-	    tval = alu_outputs.addr;                           // The branch target pc
-	 else if (alu_outputs.exc_code == exc_code_BREAKPOINT)
-`ifdef ISA_CHERI
-	    tval = getPC(rg_pcc);                   // The faulting virtual address
-`else
-	    tval = rg_stage_input.pc;                          // The faulting virtual address
-`endif
-
-	 let trap_info = Trap_Info_Pipe {
-                                    epcc: rg_pcc,
-				    exc_code: alu_outputs.exc_code,
-                                    cheri_exc_code: alu_outputs.cheri_exc_code,
-                                    cheri_exc_reg: alu_outputs.cheri_exc_reg,
-				    tval:     tval};
-
-	 output_stage1.ostatus        = ostatus;
-	 output_stage1.control        = alu_outputs.control;
-	 output_stage1.trap_info      = trap_info;
-	 output_stage1.redirect       = redirect;
-`ifdef ISA_CHERI
-         output_stage1.next_pcc       = next_pcc_local;
-`else
-	 output_stage1.next_pc        = next_pc_local;
-`endif
-	 output_stage1.cf_info        = alu_outputs.cf_info;
-	 output_stage1.data_to_stage2 = data_to_stage2;
-      end
-
-      return output_stage1;
-   endfunction: fv_out
+   // replaced with code above instantiating stage1_syn
 
    (* fire_when_enabled, no_implicit_conditions *)
    rule commit_pcc;
@@ -486,19 +337,190 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
 
    // ---- Output
    method Output_Stage1 out;
-      return fv_out;
+      //return fv_out;
+      return stage1_outputs;
    endmethod
 
    method Action deq ();
+      let next_pcc_local = stage1_outputs.next_pcc;
       rw_next_pcc.wset(next_pcc_local);
    endmethod
 
    // ---- Input
+   //method Action enq (Data_StageD_to_Stage1  data) if (!(rg_rs1_busy || rg_rs1_busy));
    method Action enq (Data_StageD_to_Stage1  data);
+      if (verbosity > 1) begin
+         $display ("stage1 enq");
+         $display ("data: ", fshow(data));
+      end
+
       if (data.refresh_pcc) begin
          rw_fresh_pcc.wset(fresh_pcc);
       end
+
+`ifdef ISA_CHERI
+      // add DDC address to immediate field when the decode stage tells us to
+      Bool add_ddc_to_imm = tpl_4 (data.decoded_instr.cheri_info).alu_add_ddc_addr_to_imm;
+      Bool add_pcc_a_to_imm = tpl_4 (data.decoded_instr.cheri_info).alu_add_pcc_addr_to_imm;
+      Bool add_pcc_b_to_imm = tpl_4 (data.decoded_instr.cheri_info).alu_add_pcc_base_to_imm;
+      PCC_T pcc_to_use = data.refresh_pcc ? fresh_pcc : stage1_outputs.next_pcc;
+      if (add_ddc_to_imm || add_pcc_a_to_imm || add_pcc_b_to_imm) begin
+         data.decoded_instr.imm = data.decoded_instr.imm + ( add_ddc_to_imm   ? getAddr (ddc)
+                                                           : add_pcc_a_to_imm ? getPCCAddr (pcc_to_use)
+                                                           : getPCCBase (pcc_to_use));
+         if (verbosity > 1) begin
+            $display ("immediate updated to: ", fshow(data.decoded_instr.imm));
+         end
+      end
+`endif
+
       rg_stage_input <= data;
+`ifdef NEW_BYPASS
+      let decoded_instr = data.decoded_instr;
+      let rs1 = data.decoded_instr.rs1;
+      let rs2 = data.decoded_instr.rs2;
+
+`ifdef DELAY_REGFILE_READ
+      let rs1_val = ?;
+      let rs2_val = ?;
+`else
+      let rs1_val = data.rs1_val;
+      let rs2_val = data.rs2_val;
+`endif
+
+`ifdef DELAY_REGFILE_READ
+      // explicitly bypass stuff here, since we need to know explicitly whether w
+      // forwarded rs1 and rs2 values
+
+      // register rs1
+      let busy1a = False;
+      let busy1b = False;
+      let rs1a = rs1_val;
+      let read_rs1_from_regfile = True;
+      if (rs1 == bypass_from_stage3.rd) begin
+         if (bypass_from_stage3.bypass_state == BYPASS_RD) begin
+            busy1a = True;
+            read_rs1_from_regfile = False;
+         end else if (bypass_from_stage3.bypass_state == BYPASS_RD_RDVAL) begin
+            rs1a = bypass_from_stage3.rd_val;
+            read_rs1_from_regfile = False;
+         end
+      end
+
+      let rs1b = rs1a;
+      if (rs1 == bypass_from_stage2.rd) begin
+         if (bypass_from_stage2.bypass_state == BYPASS_RD) begin
+            busy1b = True;
+            read_rs1_from_regfile = False;
+         end else if (bypass_from_stage2.bypass_state == BYPASS_RD_RDVAL) begin
+            rs1b = bypass_from_stage2.rd_val;
+            read_rs1_from_regfile = False;
+         end
+      end
+
+      if (rs1 == 0) begin
+         read_rs1_from_regfile = False;
+      end
+
+      // register rs2
+      let busy2a = False;
+      let busy2b = False;
+      let rs2a = rs2_val;
+      let read_rs2_from_regfile = True;
+      if (rs2 == bypass_from_stage3.rd) begin
+         if (bypass_from_stage3.bypass_state == BYPASS_RD) begin
+            busy2a = True;
+            read_rs2_from_regfile = False;
+         end else if (bypass_from_stage3.bypass_state == BYPASS_RD_RDVAL) begin
+            rs2a = bypass_from_stage3.rd_val;
+            read_rs2_from_regfile = False;
+         end
+      end
+
+      let rs2b = rs2a;
+      if (rs2 == bypass_from_stage2.rd) begin
+         if (bypass_from_stage2.bypass_state == BYPASS_RD) begin
+            busy2b = True;
+            read_rs2_from_regfile = False;
+         end else if (bypass_from_stage2.bypass_state == BYPASS_RD_RDVAL) begin
+            rs2b = bypass_from_stage2.rd_val;
+            read_rs2_from_regfile = False;
+         end
+      end
+
+      if (rs2 == 0) begin
+         read_rs2_from_regfile = False;
+      end
+`else
+`ifdef DEDUPLICATE_BYPASS
+      match { .busy1a, .rs1a } <- bypass_wrapper_1a.func (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } <- bypass_wrapper_1b.func (bypass_from_stage2, rs1, rs1a);
+
+      match { .busy2a, .rs2a } <- bypass_wrapper_2a.func (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } <- bypass_wrapper_2b.func (bypass_from_stage2, rs2, rs2a);
+`else
+      match { .busy1a, .rs1a } = fn_gpr_bypass (bypass_from_stage3, rs1, rs1_val);
+      match { .busy1b, .rs1b } = fn_gpr_bypass (bypass_from_stage2, rs1, rs1a);
+
+      match { .busy2a, .rs2a } = fn_gpr_bypass (bypass_from_stage3, rs2, rs2_val);
+      match { .busy2b, .rs2b } = fn_gpr_bypass (bypass_from_stage2, rs2, rs2a);
+`endif
+`endif
+
+      let rs1c = rs1b;
+      let rs2c = rs2b;
+      let busy1c = False;
+      let busy2c = False;
+      if (rg_full && stage1_outputs.ostatus == OSTATUS_PIPE) begin
+         if (stage1_outputs.data_to_stage2.op_stage2 == OP_Stage2_ST) begin
+
+         end
+         else if (stage1_outputs.data_to_stage2.op_stage2 == OP_Stage2_ALU) begin
+            //if (rs1 == rg_stage_input.decoded_instr.rd) begin
+            if (rs1 == stage1_outputs.data_to_stage2.rd) begin
+               rs1c = stage1_outputs.data_to_stage2.val1.val;
+`ifdef DELAY_REGFILE_READ
+               read_rs1_from_regfile = False;
+`endif
+            end
+            //if (rs2 == rg_stage_input.decoded_instr.rd) begin
+            if (rs2 == stage1_outputs.data_to_stage2.rd) begin
+               rs2c = stage1_outputs.data_to_stage2.val1.val;
+`ifdef DELAY_REGFILE_READ
+               read_rs2_from_regfile = False;
+`endif
+            end
+         end
+         else begin
+            if (rs1 == rg_stage_input.decoded_instr.rd) begin
+               busy1c = True;
+`ifdef DELAY_REGFILE_READ
+               read_rs1_from_regfile = False;
+`endif
+            end
+            if (rs2 == rg_stage_input.decoded_instr.rd) begin
+               busy2c = True;
+`ifdef DELAY_REGFILE_READ
+               read_rs2_from_regfile = False;
+`endif
+            end
+         end
+      end
+
+`ifdef ISA_CHERI
+      rg_rs1_val <= (rs1 != 0) ? rs1c : nullCap;
+      rg_rs2_val <= (rs2 != 0) ? rs2c : nullCap;
+`else
+      rg_rs1_val <= (rs1 != 0) ? rs1c : 0;
+      rg_rs2_val <= (rs2 != 0) ? rs2c : 0;
+`endif
+      rg_rs1_busy <= busy1a || busy1b || busy1c;
+      rg_rs2_busy <= busy2a || busy2b || busy2c;
+`ifdef DELAY_REGFILE_READ
+      rg_read_rs1_from_regfile <= read_rs1_from_regfile;
+      rg_read_rs2_from_regfile <= read_rs2_from_regfile;
+`endif
+`endif // NEW_BYPASS
    endmethod
 
    method Action set_full (Bool full);

@@ -10,7 +10,7 @@ package CPU_Decode_C;
 // ================================================================
 // Exports
 
-export fv_decode_C;
+//export fv_decode_C;
 
 // ================================================================
 // BSV library imports
@@ -28,6 +28,18 @@ export fv_decode_C;
 import ISA_Decls   :: *;
 
 // ================================================================
+
+interface Decode_C_IFC;
+   (* always_enabled *)
+   method Instr decode_c_out (MISA misa, Bit #(2) xl, Instr_C instr_c);
+endinterface
+
+(* synthesize *)
+module mkDecode_C (Decode_C_IFC);
+   method Instr decode_c_out (MISA misa, Bit #(2) xl, Instr_C instr_c);
+      return fv_decode_C (misa, xl, instr_c);
+   endmethod
+endmodule
 
 function Instr fv_decode_C (MISA misa, Bit #(2) xl, Instr_C instr_C);
    // ----------------

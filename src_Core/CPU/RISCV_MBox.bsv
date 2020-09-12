@@ -50,7 +50,7 @@ endinterface
 
 // ================================================================
 
-typedef enum { STATE_MUL1, STATE_MUL2, STATE_DIV_REM } State
+typedef enum { STATE_MUL1_START, STATE_MUL1, STATE_MUL2, STATE_DIV_REM_START, STATE_DIV_REM } State
 deriving (Bits, Eq, FShow);
 
 (* synthesize *)
@@ -64,6 +64,8 @@ module mkRISCV_MBox (RISCV_MBox_IFC);
    Reg #(Bit #(3))  rg_f3              <- mkRegU;
    Reg #(WordXL)    rg_v1              <- mkRegU;
    Reg #(WordXL)    rg_v2              <- mkRegU;
+   Reg #(WordXL)    rg_v1_0            <- mkRegU;
+   Reg #(WordXL)    rg_v2_0            <- mkRegU;
    Reg #(WordXL)    rg_result          <- mkRegU;
 
    IntDiv_IFC #(XLEN) intDiv <- mkIntDiv (rg_v1, rg_v2);
@@ -78,6 +80,18 @@ module mkRISCV_MBox (RISCV_MBox_IFC);
 
    Reg #(Bool)    dw_valid  <- mkDWire (False);
    Reg #(WordXL)  dw_result <- mkDWire (?);
+
+   rule start_operation (rg_state == STATE_MUL1_START || rg_state == STATE_DIV_REM_START);
+      Bool is_signed = (rg_f3 [0] == 1'b0);
+      rg_v1 <= rg_v1_0;
+      rg_v2 <= rg_v2_0;
+      if (rg_state == STATE_MUL1_START) begin
+         rg_state <= rg_state == STATE_MUL1_START ? STATE_MUL1 : STATE_DIV_REM;
+      end else begin
+         rg_state <= rg_state == STATE_MUL1_START ? STATE_MUL1 : STATE_DIV_REM;
+	 intDiv.start (is_signed, is_signed);
+      end
+   endrule
 
 
    // ----------------------------------------------------------------
@@ -210,13 +224,13 @@ module mkRISCV_MBox (RISCV_MBox_IFC);
 
       rg_is_OP_not_OP_32 <= is_OP_not_OP_32;
       rg_f3              <= f3;
-      rg_v1              <= v1;
-      rg_v2              <= v2;
+      rg_v1_0            <= v1;
+      rg_v2_0            <= v2;
 
       // MUL, MULH, MULHU, MULHSU
 
       if (f3 [2] == 1'b0) begin
-	 rg_state <= STATE_MUL1;
+	 rg_state <= STATE_MUL1_START;
 
 `ifdef MULT_SERIAL
 	 Bool s1, s2;
@@ -255,8 +269,7 @@ module mkRISCV_MBox (RISCV_MBox_IFC);
 
       // DIV, DIVU, REM, REMU
       else begin
-	 rg_state <= STATE_DIV_REM;
-	 intDiv.start (is_signed, is_signed);
+	 rg_state <= STATE_DIV_REM_START;
       end
    endmethod
 

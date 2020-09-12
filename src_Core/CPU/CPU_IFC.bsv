@@ -23,7 +23,9 @@ package CPU_IFC;
 
 import GetPut       :: *;
 import ClientServer :: *;
+`ifndef Near_Mem_Avalon
 import AXI4         :: *;
+`endif
 
 // ================================================================
 // Project imports
@@ -63,15 +65,36 @@ interface CPU_IFC;
    // ----------------
    // SoC fabric connections
 
+
+`ifdef Near_Mem_Avalon
+   // IMem to avalon
+   (* always_ready *)  method Bit #(XLEN)         avm_instr_address;
+   (* always_ready *)  method Bool                avm_instr_read;
+   (* always_ready *)  method Bool                avm_instr_write;
+   (* always_ready *)  method Bit #(XLEN)         avm_instr_writedata;
+   (* always_ready *)  method Bit #(Bytes_per_WordXL) avm_instr_byteenable;
+`else
    // IMem to Fabric master interface
    interface AXI4_Master #( Wd_MId, Wd_Addr, Wd_Data
                           , Wd_AW_User, Wd_W_User, Wd_B_User
                           , Wd_AR_User, Wd_R_User)  imem_master;
+`endif
 
+
+`ifdef Near_Mem_Avalon
+   // DMem to avalon
+   (* always_ready *)  method Bit #(XLEN)         avm_data_address;
+   (* always_ready *)  method Bool                avm_data_read;
+   (* always_ready *)  method Bool                avm_data_write;
+   (* always_ready *)  method Bit #(XLEN)         avm_data_writedata;
+   (* always_ready *)  method Bit #(Bytes_per_WordXL) avm_data_byteenable;
+`else
    // DMem to Fabric master interface
    interface AXI4_Master #( Wd_MId_2x3, Wd_Addr, Wd_Data
                           , Wd_AW_User, Wd_W_User, Wd_B_User
-                          , Wd_AR_User, Wd_R_User)  mem_master;
+                          , Wd_AR_User, Wd_R_User)  dmem_master;
+`endif
+
 
    // ----------------------------------------------------------------
    // Optional AXI4-Lite D-cache slave interface
@@ -83,9 +106,11 @@ interface CPU_IFC;
    // ----------------
    // Interface to 'coherent DMA' port of optional L2 cache
 
+`ifndef Near_Mem_Avalon
    interface AXI4_Slave #( Wd_Id_Dma, Wd_Addr_Dma, Wd_Data_Dma
                          , Wd_AW_User_Dma, Wd_W_User_Dma, Wd_B_User_Dma
                          , Wd_AR_User_Dma, Wd_R_User_Dma)  dma_server;
+`endif
 
    // ----------------------------------------------------------------
 
@@ -166,12 +191,14 @@ interface CPU_IFC;
    method Bit #(64) mv_tohost_value;
 `endif
 
+`ifndef Near_Mem_Avalon
    // Inform core that DDR4 has been initialized and is ready to accept requests
    method Action ma_ddr4_ready;
 
    // Misc. status; 0 = running, no error
    (* always_ready *)
    method Bit #(8) mv_status;
+`endif
 
 endinterface
 
