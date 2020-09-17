@@ -182,14 +182,6 @@ typedef  Bit #(7)   Opcode;
 typedef  Bit #(5)   RegName;       // 32 registers, 0..31
 typedef  32         NumRegs;
 Integer  numRegs = valueOf (NumRegs);
-typedef union tagged {
-   Bit #(12) Imm12_I;
-   Bit #(12) Imm12_S;
-   Bit #(13) Imm13_SB;
-   Bit #(20) Imm20_U;
-   Bit #(21) Imm21_UJ;
-} Instr_Immediate
-deriving (FShow, Bits);
 
 Instr  illegal_instr = 32'h0000_0000;
 
@@ -228,56 +220,6 @@ function  Bit #(21)  instr_UJ_imm21 (Instr x);
    return { x [31], x [19:12], x [20], x [30:21], 1'b0 };
 endfunction
 
-function Instr_Immediate instr_imm (Instr x);
-   let opcode = instr_opcode(x);
-   if (opcode == op_BRANCH) begin
-      return Imm13_SB(instr_SB_imm13(x));
-   end
-   else if (opcode == op_JAL) begin
-      return Imm21_UJ(instr_UJ_imm21(x));
-   end
-   else if (opcode == op_JALR) begin
-      return Imm12_I(instr_I_imm12(x));
-   end
-   else if (opcode == op_OP_IMM) begin
-      return Imm12_I(instr_I_imm12(x));
-   end
-   else if (opcode == op_OP) begin
-      // there is no immediate
-      return Imm12_I(instr_I_imm12(x));
-   end
-   else if (opcode == op_OP_IMM_32) begin
-      return Imm12_I(instr_I_imm12(x));
-   end
-   else if (opcode == op_OP_32) begin
-      // there is no immediate
-      return Imm12_I(instr_I_imm12(x));
-   end
-   else if (opcode == op_AUIPC) begin
-      return Imm20_U(instr_U_imm20(x));
-   end
-   else if (opcode == op_LOAD) begin
-      return Imm12_I(instr_I_imm12(x));
-   end
-   else if (opcode == op_STORE) begin
-      return Imm12_I(instr_S_imm12(x));
-   end
-`ifdef ISA_F
-   else if (opcode == op_LOAD_FP) begin
-      return Imm12_I(instr_I_imm12(x));
-   end
-   else if (opcode == op_STORE_FP) begin
-      return Imm12_I(instr_S_imm12(x));
-   end
-`endif
-   else if (opcode == op_LUI) begin
-      return Imm20_U(instr_U_imm20(x));
-   end
-   else begin
-      return Imm12_I(instr_I_imm12(x));
-   end
-endfunction
-
 // For FENCE decode
 function  Bit #(4)   instr_pred (Instr x); return x [27:24]; endfunction
 function  Bit #(4)   instr_succ (Instr x); return x [23:20]; endfunction
@@ -302,7 +244,7 @@ typedef struct {
    Bit #(7)  funct7;
    Bit #(10) funct10;
 
-   Instr_Immediate imm;
+   Bit #(21) imm;
 
    Bit #(4)  pred;
    Bit #(4)  succ;
@@ -325,7 +267,7 @@ function Decoded_Instr fv_decode (Instr instr);
 			 funct7:    instr_funct7   (instr),
 			 funct10:   instr_funct10  (instr),
 
-			 imm:       instr_imm      (instr),
+			 imm:       fn_merge_immediate      (instr),
 
 			 pred:      instr_pred     (instr),
 			 succ:      instr_succ     (instr),
@@ -1082,6 +1024,37 @@ endfunction
 function Bool f3_is_CSRR_S_or_C (Bit #(3) f3);
    return ((f3 == f3_CSRRS) || (f3 == f3_CSRRSI) ||
 	   (f3 == f3_CSRRC) || (f3 == f3_CSRRCI));
+endfunction
+
+function  Bit #(21)  fn_merge_immediate (Instr x);
+   // Base instruction set immediates
+   let opcode = instr_opcode (x);
+   //Bit #(21) imm = instr_I_imm12 (x); // default to I type
+   Bit #(21) imm = signExtend (1'b1); // default to all 1s for testing
+        if (opcode == op_LUI)       imm = signExtend (instr_U_imm20  (x));
+   else if (opcode == op_AUIPC)     imm = signExtend (instr_U_imm20  (x));
+   else if (opcode == op_JAL)       imm = signExtend (instr_UJ_imm21 (x));
+   else if (opcode == op_JALR)      imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_BRANCH)    imm = signExtend (instr_SB_imm13 (x));
+   else if (opcode == op_LOAD)      imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_STORE)     imm = signExtend (instr_S_imm12  (x));
+   else if (opcode == op_OP_IMM)    imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_OP)        imm =                               ?; // no immediate
+   else if (opcode == op_SYSTEM)    imm = signExtend (instr_I_imm12  (x));
+`ifdef ISA_F
+   else if (opcode == op_FP)        imm =                               ?; // no immediate
+   else if (opcode == op_FMADD)     imm =                               ?; // no immediate
+   else if (opcode == op_FMSUB)     imm =                               ?; // no immediate
+   else if (opcode == op_FNMADD)    imm =                               ?; // no immediate
+   else if (opcode == op_FNMSUB)    imm =                               ?; // no immediate
+   else if (opcode == op_LOAD_FP)   imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_STORE_FP)  imm = signExtend (instr_S_imm12  (x));
+`endif
+   else if (opcode == op_OP_32)     imm =                               ?; // no immediate
+   else if (opcode == op_OP_IMM_32) imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_AMO)       imm =                               ?; // no immediate
+   else if (opcode == op_MISC_MEM)  imm = signExtend (instr_I_imm12  (x));
+   return imm;
 endfunction
 
 // ================================================================
