@@ -300,7 +300,12 @@ module mkCPU (CPU_IFC);
 					   rg_epoch,
 					   rg_cur_priv);
 
-   CPU_StageD_IFC  stageD <- mkCPU_StageD (cur_verbosity, misa);
+   Bit #(1) pcc_cap_mode_bit = getFlags (toCapPipeNoOffset (stage1.out.next_pcc))[0];
+   Bit #(1) fresh_pcc_cap_mode_bit = getFlags (rg_next_pcc)[0];
+   CPU_StageD_IFC  stageD <- mkCPU_StageD (cur_verbosity,
+                                           misa,
+                                           pcc_cap_mode_bit,
+                                           fresh_pcc_cap_mode_bit);
 
    CPU_StageF_IFC  stageF <- mkCPU_StageF (cur_verbosity, imem);
 

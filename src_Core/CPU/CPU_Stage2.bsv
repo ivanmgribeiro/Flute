@@ -299,7 +299,7 @@ module mkCPU_Stage2 #(Bit #(4)         verbosity,
 	 Bit #(5) amo_funct5 = 0;
 	 Bit #(7) amo_funct7 = 0;
 `endif
-	 if ((x.op_stage2 == OP_Stage2_LD) || (x.op_stage2 == OP_Stage2_ST) || op_stage2_amo) begin
+	 if (((x.op_stage2 == OP_Stage2_LD) || (x.op_stage2 == OP_Stage2_ST) || op_stage2_amo) && !x.trap) begin
 	    WordXL   mstatus     = csr_regfile.read_mstatus;
 `ifdef ISA_PRIV_S
 	    Bit #(1) sstatus_SUM = (csr_regfile.read_sstatus) [18];

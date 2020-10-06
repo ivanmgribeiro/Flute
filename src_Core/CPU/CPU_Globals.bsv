@@ -213,27 +213,39 @@ endfunction
 
 `ifdef ISA_CHERI
 typeclass PCC#(type t);
-    function Exact#(t) setPC (t oldPCC, Addr newPC);
+    function t setPC (t oldPCC, Addr newPC);
+    function t setPCCAddr (t oldPCC, Addr newPC);
     function Addr getPC (t pcc);
+    function Addr getPCCAddr (t pcc);
     function Addr getPCCBase (t pcc);
+    function Bit #(TAdd #(XLEN, 1)) getPCCTop (t pcc);
     function Bool checkPreValid (t pcc);
-    function Maybe#(CHERI_Exc_Code) checkValid (t pcc, Bit#(TAdd#(XLEN,1)) top, Bool is_i32_not_i16);
+    function Maybe#(CHERI_Exc_Code) checkValid (t pcc, Bool is_i32_not_i16);
     function t fromCapPipe(CapPipe pcc);
     function CapPipe toCapPipe(t pcc);
+    function CapPipe toCapPipeNoOffset(t pcc);
 endtypeclass
 
 typedef Tuple2#(CapPipe,Bit#(XLEN)) PCC_T;
 
 instance PCC#(PCC_T);
-    function Exact#(PCC_T) setPC (PCC_T oldPCC, Addr newPC);
-        let setOffsetResult = setOffset(tpl_1(oldPCC), newPC);
-        return Exact {exact: setOffsetResult.exact, value: tuple2(setOffsetResult.value, tpl_2(oldPCC))};
+    function PCC_T setPC (PCC_T oldPCC, Addr newPC);
+        return tuple2 (tpl_1 (oldPCC), newPC + getPCCBase (oldPCC));
+    endfunction
+    function PCC_T setPCCAddr (PCC_T oldPCC, Addr newAddr);
+        return tuple2 (tpl_1 (oldPCC), newAddr);
     endfunction
     function Addr getPC (PCC_T pcc);
-        return getOffset(tpl_1(pcc));
+        return tpl_2 (pcc) - getPCCBase (pcc);
+    endfunction
+    function Addr getPCCAddr (PCC_T pcc);
+        return tpl_2 (pcc);
     endfunction
     function Addr getPCCBase (PCC_T pcc);
-        return tpl_2(pcc);
+        return getAddr (tpl_1 (pcc));
+    endfunction
+    function Bit #(TAdd #(XLEN, 1)) getPCCTop (PCC_T pcc);
+        return getTop (tpl_1 (pcc));
     endfunction
     // Check if a PCC dereference is valid before the instruction len is known
     function Bool checkPreValid (PCC_T pcc);
@@ -241,9 +253,10 @@ instance PCC#(PCC_T);
         return  isValidCap(tpl_1(pcc))
              && getKind(tpl_1(pcc)) == UNSEALED
              && getHardPerms(tpl_1(pcc)).permitExecute
-             && isInBounds(tpl_1(pcc), False);
+             && getPCCAddr (pcc) >= getPCCBase (pcc)
+             && zeroExtend (getPCCAddr (pcc)) < getPCCTop (pcc);
     endfunction
-    function Maybe#(CHERI_Exc_Code) checkValid (PCC_T pcc, Bit#(TAdd#(XLEN,1)) top, Bool is_i32_not_i16);
+    function Maybe#(CHERI_Exc_Code) checkValid (PCC_T pcc, Bool is_i32_not_i16);
         let toRet = Invalid;
         //TODO alignment checks?
         CapPipe ac = almightyCap;
@@ -253,15 +266,21 @@ instance PCC#(PCC_T);
             toRet = Valid(exc_code_CHERI_Seal);
         else if (!getHardPerms(tpl_1(pcc)).permitExecute)
             toRet = Valid(exc_code_CHERI_XPerm);
-        else if (!isInBounds(tpl_1(pcc), False) || !isInBounds(setAddrUnsafe(tpl_1(pcc), getAddr(tpl_1(pcc)) + (is_i32_not_i16 ? 4 : 2)), True))
+        else if (  (zeroExtend (getPCCAddr (pcc)) > getPCCTop (pcc))
+                || ( (zeroExtend (getPCCAddr (pcc)) + (is_i32_not_i16 ? 4 : 2)) > getPCCTop (pcc))
+                || (getPCCAddr (pcc) < getPCCBase (pcc))
+                )
             toRet = Valid(exc_code_CHERI_Length);
         return toRet;
     endfunction
     function PCC_T fromCapPipe(CapPipe pcc);
-        return tuple2(pcc, getBase(pcc));
+        return tuple2(setAddrUnsafe (pcc, getBase (pcc)), getAddr(pcc));
     endfunction
     function CapPipe toCapPipe(PCC_T pcc);
-        return tpl_1(pcc);
+        return setAddr (tpl_1 (pcc), tpl_2 (pcc));
+    endfunction
+    function CapPipe toCapPipeNoOffset (PCC_T pcc);
+        return tpl_1 (pcc);
     endfunction
 endinstance
 

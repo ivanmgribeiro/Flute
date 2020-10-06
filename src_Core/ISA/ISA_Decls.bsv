@@ -168,6 +168,53 @@ typedef Bit #(0) Token;
 typedef enum { ISIZE16BIT, ISIZE32BIT
    } ISize deriving (Bits, Eq, FShow);
 
+typedef enum {
+   OP1_PC,
+   OP1_RS1,
+   OP1_RS1_S,
+   OP1_RS1_NEG,
+`ifdef RV64
+   OP1_RS1_B32,
+   OP1_RS1_B32_S,
+   OP1_RS1_B32_REV,
+   OP1_RS1_B32_NEG,
+`endif
+   OP1_RS1_REV,
+   OP1_RS1_MASKED
+} ALU_Op1_Source deriving (Bits, Eq, FShow);
+
+typedef enum {
+   OP2_IMM,
+   OP2_IMM_S,
+   OP2_IMM_NEG,
+   OP2_IMM_HIGH,
+   OP2_RS2,
+   OP2_RS2_NEG,
+`ifdef RV64
+   OP2_RS2_B32,
+   OP2_RS2_B32_NEG,
+`endif
+   OP2_TYPE_UNSEALED,
+   OP2_TYPE_SENTRY,
+   OP2_KIND,
+   OP2_FALLTHRU_PC,
+   OP2_CHERI_OP2_ADDR,
+   OP2_ZERO,
+   OP2_TWO
+} ALU_Op2_Source deriving (Bits, Eq, FShow);
+
+typedef enum {
+   CMPOP1_RS1,
+   CMPOP1_RS1_S
+} ALU_CompOp1_Source deriving (Bits, Eq, FShow);
+
+typedef enum {
+   CMPOP2_RS2,
+   CMPOP2_RS2_S,
+   CMPOP2_IMM,
+   CMPOP2_IMM_S
+} ALU_CompOp2_Source deriving (Bits, Eq, FShow);
+
 typedef  Bit #(32)  Instr;
 typedef  Bit #(7)   Opcode;
 typedef  Bit #(5)   RegName;       // 32 registers, 0..31
@@ -191,6 +238,7 @@ function  RegName    instr_rs1      (Instr x); return x [19:15]; endfunction
 function  RegName    instr_rs2      (Instr x); return x [24:20]; endfunction
 function  RegName    instr_rs3      (Instr x); return x [31:27]; endfunction
 function  CSR_Addr   instr_csr      (Instr x); return unpack(x [31:20]); endfunction
+
 
 function  Bit #(12)  instr_I_imm12  (Instr x);
    return x [31:20];
@@ -239,13 +287,28 @@ typedef struct {
 `ifdef ISA_CHERI
    Bit #(5)  funct5rs2;
    Bit #(5)  funct5rd;
+
+   Tuple4 #(CHERI_Op_Sources,
+            CHERI_Cap_Checks,
+            CHERI_Operation_Select,
+            CHERI_ALU_Control) cheri_info;
 `endif
 
+`ifdef MERGE_IMMEDIATE
+   //Bit #(21) imm;
+   Bit #(XLEN) imm;
+`else
    Bit #(12) imm12_I;
    Bit #(12) imm12_S;
    Bit #(13) imm13_SB;
    Bit #(20) imm20_U;
    Bit #(21) imm21_UJ;
+`endif
+
+   Tuple4 #(ALU_Op1_Source,
+            ALU_Op2_Source,
+            ALU_CompOp1_Source,
+            ALU_CompOp2_Source)   operands;
 
    Bit #(4)  pred;
    Bit #(4)  succ;
@@ -254,7 +317,19 @@ typedef struct {
    } Decoded_Instr
 deriving (FShow, Bits);
 
-function Decoded_Instr fv_decode (Instr instr);
+interface Decode_IFC;
+   (* always_enabled *)
+   method Decoded_Instr decode_out (Instr instr, Bit #(1) pcc_cap_mode_bit);
+endinterface
+
+(* synthesize *)
+module mkDecode (Decode_IFC);
+   method Decoded_Instr decode_out (Instr instr, Bit #(1) pcc_cap_mode_bit);
+      return fv_decode (instr, pcc_cap_mode_bit);
+   endmethod
+endmodule
+
+function Decoded_Instr fv_decode (Instr instr, Bit #(1) pcc_cap_mode_bit);
    return Decoded_Instr {opcode:    instr_opcode (instr),
 
 			 rd:        instr_rd       (instr),
@@ -270,13 +345,20 @@ function Decoded_Instr fv_decode (Instr instr);
 `ifdef ISA_CHERI
 			 funct5rs2: instr_cap_funct5rs2 (instr),
 			 funct5rd:  instr_cap_funct5rd  (instr),
+          cheri_info: fn_cheri_decode (instr, pcc_cap_mode_bit),
 `endif
 
+`ifdef MERGE_IMMEDIATE
+                         imm:       fn_merge_immediate (instr),
+`else
 			 imm12_I:   instr_I_imm12  (instr),
 			 imm12_S:   instr_S_imm12  (instr),
 			 imm13_SB:  instr_SB_imm13 (instr),
 			 imm20_U:   instr_U_imm20  (instr),
 			 imm21_UJ:  instr_UJ_imm21 (instr),
+`endif
+
+          operands:  fn_select_operands (instr),
 
 			 pred:      instr_pred     (instr),
 			 succ:      instr_succ     (instr),
@@ -1024,7 +1106,8 @@ Bit #(7)  f7_SFENCE_VMA = 7'b_0001_001;
 Instr break_instr = { f12_EBREAK, 5'b00000, 3'b000, 5'b00000, op_SYSTEM };
 
 function Bool fn_instr_is_csrrx (Instr  instr);
-   let decoded_instr = fv_decode (instr);
+   let decoded_instr = fv_decode (instr, ?); // don't care about the second operand
+                                             // TODO wrap in ifdef ISA_CHERI
    let opcode        = decoded_instr.opcode;
    let funct3        = decoded_instr.funct3;
    let csr           = decoded_instr.csr;
@@ -1043,6 +1126,384 @@ function Bool f3_is_CSRR_S_or_C (Bit #(3) f3);
    return ((f3 == f3_CSRRS) || (f3 == f3_CSRRSI) ||
 	   (f3 == f3_CSRRC) || (f3 == f3_CSRRCI));
 endfunction
+
+
+
+
+
+//function  Bit #(21)  fn_merge_immediate (Instr x);
+function  Bit #(XLEN)  fn_merge_immediate (Instr x);
+//Opcode   op_SYSTEM      = 7'b11_100_11;
+//Opcode   op_FP          = 7'b10_10_011;
+//Opcode   op_FMADD       = 7'b10_00_011;
+//Opcode   op_FMSUB       = 7'b10_00_111;
+//Opcode   op_FNMSUB      = 7'b10_01_011;
+//Opcode   op_FNMADD      = 7'b10_01_111;
+//Opcode   op_LOAD_FP     = 7'b00_001_11;
+//Opcode   op_STORE_FP    = 7'b01_001_11;
+//Opcode   op_JALR        = 7'b11_001_11;
+//Opcode   op_JAL         = 7'b11_011_11;
+//Opcode   op_BRANCH      = 7'b11_000_11;
+//Opcode   op_AUIPC       = 7'b00_101_11;
+//Opcode   op_LUI         = 7'b01_101_11;
+//Opcode   op_OP_32       = 7'b01_110_11;
+//Opcode   op_OP          = 7'b01_100_11;
+//Opcode   op_OP_IMM_32   = 7'b00_110_11;
+//Opcode   op_OP_IMM      = 7'b00_100_11;
+//Opcode   op_AMO         = 7'b01_011_11;
+//Opcode   op_MISC_MEM    = 7'b00_011_11;
+//Opcode   op_STORE       = 7'b01_000_11;
+//Opcode   op_LOAD        = 7'b00_000_11;
+   // Base instruction set immediates
+   let opcode = instr_opcode (x);
+   let funct3 = instr_funct3 (x);
+   let funct7 = instr_funct7 (x);
+   //Bit #(21) imm = instr_I_imm12 (x); // default to I type
+   //Bit #(21) imm = signExtend (1'b1); // default to all 1s for testing
+   Bit #(XLEN) imm = signExtend (1'b1); // default to all 1s for testing
+        if (opcode == op_LUI)       imm = signExtend (instr_U_imm20  (x));
+   else if (opcode == op_AUIPC)     imm = signExtend (instr_U_imm20  (x));
+   else if (opcode == op_JAL)       imm = signExtend (instr_UJ_imm21 (x));
+   else if (opcode == op_JALR)      imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_BRANCH)    imm = signExtend (instr_SB_imm13 (x));
+   else if (opcode == op_LOAD)      imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_STORE)     imm = signExtend (instr_S_imm12  (x));
+   else if (opcode == op_OP_IMM)    imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_OP)        imm =                               ?; // no immediate
+   else if (opcode == op_SYSTEM)    imm = signExtend (instr_I_imm12  (x));
+`ifdef ISA_F
+   else if (opcode == op_FP)        imm =                               ?; // no immediate
+   else if (opcode == op_FMADD)     imm =                               ?; // no immediate
+   else if (opcode == op_FMSUB)     imm =                               ?; // no immediate
+   else if (opcode == op_FNMADD)    imm =                               ?; // no immediate
+   else if (opcode == op_FNMSUB)    imm =                               ?; // no immediate
+   else if (opcode == op_LOAD_FP)   imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_STORE_FP)  imm = signExtend (instr_S_imm12  (x));
+`endif
+   else if (opcode == op_OP_32)     imm =                               ?; // no immediate
+   else if (opcode == op_OP_IMM_32) imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_AMO)       imm =                               ?; // no immediate
+   else if (opcode == op_MISC_MEM)  imm = signExtend (instr_I_imm12  (x));
+   else if (opcode == op_cap_Manip) begin
+      case (funct3)
+         f3_cap_CIncOffsetImmediate:
+            imm = signExtend (instr_I_imm12  (x));
+         f3_cap_CSetBoundsImmediate:
+            imm = zeroExtend (instr_I_imm12  (x));
+         f3_cap_ThreeOp: begin
+               case (funct7)
+                  f7_cap_Loads: begin
+                     imm = 0;
+                  end
+                  f7_cap_Stores: begin
+                     imm = 0;
+                  end
+                  default: begin
+                     imm = signExtend (instr_I_imm12 (x));
+                  end
+               endcase
+            end
+         default:
+            imm = signExtend (instr_I_imm12  (x));
+      endcase
+   end
+   // TODO fast register clear instructions?
+   return imm;
+endfunction
+
+
+function Tuple4 #(ALU_Op1_Source, ALU_Op2_Source, ALU_CompOp1_Source, ALU_CompOp2_Source) fn_select_operands (Instr instr);
+   let op1_source = OP1_RS1_REV;
+   let op2_source = OP2_RS2_NEG;
+   // op2_source used as CHERI internal op 2 when CHERI is enabled
+   //let op1_source = ?;
+   //let op2_source = ?;
+   let cmpop1_source = ?;
+   let cmpop2_source = ?;
+
+   let getbounds_op1 = ?;
+   let getbounds_op2 = ?;
+
+   let internal_op1_source = ?;
+   let internal_op2_source = ?;
+
+   let opcode = instr_opcode (instr);
+   let funct3 = instr_funct3 (instr);
+   let funct5 = instr_funct5 (instr);
+   let funct7 = instr_funct7 (instr);
+   let funct10 = instr_funct10 (instr);
+   let rd     = instr_rd     (instr);
+   let funct5rd     = instr_rd     (instr);
+   let funct5rs2    = instr_rs2    (instr);
+
+   if (opcode == op_LUI) begin
+      op1_source = ?;
+      op2_source = ?;
+   end
+   else if (opcode == op_AUIPC) begin
+      op1_source = OP1_PC;
+      op2_source = OP2_IMM_HIGH;
+   end
+   else if (opcode == op_JAL) begin
+      op1_source = OP1_PC;
+      op2_source = OP2_IMM_S;
+   end
+   else if (opcode == op_JALR) begin
+      op1_source = OP1_RS1;
+      op2_source = OP2_IMM_S;
+   end
+   else if (opcode == op_BRANCH) begin
+      op1_source = OP1_PC;
+      op2_source = OP2_IMM_S;
+      if (  funct3 == f3_BEQ
+         || funct3 == f3_BNE
+         || funct3 == f3_BLTU
+         || funct3 == f3_BGEU
+         ) begin
+         cmpop1_source = CMPOP1_RS1;
+         cmpop2_source = CMPOP2_RS2;
+      end else begin
+         cmpop1_source = CMPOP1_RS1_S;
+         cmpop2_source = CMPOP2_RS2_S;
+      end
+   end
+   else if (opcode == op_LOAD) begin
+      op1_source = OP1_RS1;
+      op2_source = OP2_IMM_S;
+   end
+   else if (opcode == op_STORE) begin
+      op1_source = OP1_RS1;
+      op2_source = OP2_IMM_S;
+   end
+   else if (  opcode == op_OP_IMM
+           || opcode == op_OP) begin
+      Bool is_imm = opcode == op_OP_IMM;
+      op2_source    = is_imm ? OP2_IMM_S : OP2_RS2;
+      let subtract = !is_imm && instr[30] == 1'b1;
+      let shift_arith = instr[30] == 1'b1;
+      if (funct3 == f3_SLLI) begin
+         op1_source = OP1_RS1_REV;
+      end else if (  funct3 == f3_SRLI
+                  || funct3 == f3_SRAI) begin
+         op1_source = shift_arith ? OP1_RS1_S : OP1_RS1;
+      end else if (funct3 == f3_ADDI) begin
+         if (subtract) begin
+            op1_source = OP1_RS1_NEG;
+            op2_source = is_imm ? OP2_IMM_NEG : OP2_RS2_NEG;
+         end else begin
+            op1_source = OP1_RS1;
+            op2_source = is_imm ? OP2_IMM_S : OP2_RS2;
+         end
+      end else if (funct3 == f3_SLTI) begin
+         cmpop1_source = CMPOP1_RS1_S;
+         cmpop2_source = is_imm ? CMPOP2_IMM_S : CMPOP2_RS2_S;
+      end else if (funct3 == f3_SLTIU) begin
+         cmpop1_source = CMPOP1_RS1;
+         cmpop2_source = is_imm ? CMPOP2_IMM : CMPOP2_RS2;
+      end else if (  funct3 == f3_XORI
+                  || funct3 == f3_ORI
+                  || funct3 == f3_ANDI) begin
+         op1_source = OP1_RS1;
+         op2_source = is_imm ? OP2_IMM_S : OP2_RS2;
+      end
+      // TODO decode trap?
+   end
+
+   else if (opcode == op_SYSTEM) begin
+   end
+`ifdef ISA_F
+   else if (opcode == op_FP) begin
+   end
+   else if (opcode == op_FMADD) begin
+   end
+   else if (opcode == op_FMSUB) begin
+   end
+   else if (opcode == op_FNMADD) begin
+   end
+   else if (opcode == op_FNMSUB) begin
+   end
+   else if (opcode == op_LOAD_FP) begin
+   end
+   else if (opcode == op_STORE_FP) begin
+   end
+`endif
+`ifdef RV64
+   else if (opcode == op_OP_32) begin
+      if (funct10 == f10_ADDW) begin
+         op1_source = OP1_RS1_B32;
+         op2_source = OP2_RS2_B32;
+      end else if (funct10 == f10_SUBW) begin
+         op1_source = OP1_RS1_B32_NEG;
+         op2_source = OP2_RS2_B32_NEG;
+      end else if (funct10 == f10_SLLW) begin
+         op1_source = OP1_RS1_B32_REV;
+      end else if (funct10 == f10_SRLW) begin
+         op1_source = OP1_RS1_B32;
+      end else if (funct10 == f10_SRAW) begin
+         op1_source = OP1_RS1_B32_S;
+      end
+   end
+   else if (opcode == op_OP_IMM_32) begin
+      if (funct3 == f3_ADDIW) begin
+         op1_source = OP1_RS1_B32;
+         op2_source = OP2_IMM_S;
+      end else if (funct3 == f3_SLLIW) begin
+         op1_source = OP1_RS1_B32_REV;
+      end else if (funct3 == f3_SRxIW) begin
+         if (instr[30] == 1'b1) begin
+            op1_source = OP1_RS1_B32_S;
+         end else begin
+            op1_source = OP1_RS1_B32;
+         end
+      end
+   end
+`endif
+`ifdef ISA_A
+   else if (opcode == op_AMO) begin
+   end
+`endif
+   else if (opcode == op_MISC_MEM) begin
+      op1_source = OP1_RS1;
+      op2_source = OP2_IMM_S;
+   end
+   else if (opcode == op_cap_Manip) begin
+      case (funct3)
+         f3_cap_CIncOffsetImmediate: begin
+            op2_source = OP2_IMM_S;
+         end
+         f3_cap_CSetBoundsImmediate: begin
+            op1_source = OP1_RS1;
+            op2_source = OP2_IMM;
+         end
+         f3_cap_ThreeOp: begin
+            case (funct7)
+               f7_cap_CSpecialRW: begin
+                  
+               end
+               f7_cap_CSetBounds: begin
+                  op1_source = OP1_RS1;
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CSetBoundsExact: begin
+                  op1_source = OP1_RS1;
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CSetOffset: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CSetAddr: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CIncOffset: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CSeal: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CCSeal: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_TwoSrc: begin
+                  case (rd)
+                     rd_cap_CCall: begin
+                        op1_source = OP1_RS1_MASKED;
+                        op2_source = OP2_ZERO;
+                        // TODO this has been commented out since we changed what
+                        // signal CCall sends in the cheri decode
+                        //op2_source = OP2_TYPE_UNSEALED;
+                     end
+                  endcase
+               end
+               f7_cap_CUnseal: begin
+                  op2_source = OP2_TYPE_UNSEALED;
+               end
+               f7_cap_CTestSubset: begin
+
+               end
+               f7_cap_CCopyType: begin
+                  op2_source = OP2_KIND;
+               end
+               f7_cap_CAndPerm: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CSetFlags: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CToPtr: begin
+               end
+               f7_cap_CFromPtr: begin
+                  op2_source = OP2_RS2;
+               end
+               f7_cap_CSub: begin
+                  op1_source = OP1_RS1_NEG;
+                  op2_source = OP2_RS2_NEG;
+               end
+               f7_cap_CBuildCap: begin
+
+               end
+               f7_cap_Loads: begin
+                  Bool useDDC = funct5[3] == cap_mem_ddc;
+                  op1_source = OP1_RS1;
+                  op2_source = OP2_IMM_S;
+               end
+               f7_cap_Stores: begin
+                  Bool useDDC = funct5rd[3] == cap_mem_ddc;
+                  op1_source = OP1_RS1;
+                  op2_source = OP2_IMM_S;
+               end
+               f7_cap_TwoOp: begin
+                  case (funct5rs2)
+                     f5rs2_cap_CGetLen: begin
+                     end
+                     f5rs2_cap_CGetBase: begin
+                     end
+                     f5rs2_cap_CGetTag: begin
+                     end
+                     f5rs2_cap_CGetSealed: begin
+                     end
+                     f5rs2_cap_CRRL: begin
+                     end
+                     f5rs2_cap_CRAM: begin
+                     end
+                     f5rs2_cap_CMove: begin
+                     end
+                     f5rs2_cap_CClearTag: begin
+                     end
+                     f5rs2_cap_CGetAddr: begin
+                     end
+                     f5rs2_cap_CSealEntry: begin
+                        op2_source = OP2_TYPE_SENTRY;
+                     end
+                     f5rs2_cap_CGetOffset: begin
+                     end
+                     f5rs2_cap_CGetPerm: begin
+                     end
+                     f5rs2_cap_CJALR: begin
+                        // TODO this is wrong - need to use the sum for the address
+                        op1_source = OP1_RS1;
+                        op2_source = OP2_ZERO;
+                     end
+                     f5rs2_cap_CGetType: begin
+                     end
+                  endcase
+               end
+            endcase
+         end
+      endcase
+   end
+
+   // TODO in CHERI, maybe make sure that the operands here are converted from
+   // caps to data?
+
+   return tuple4 (op1_source, op2_source, cmpop1_source, cmpop2_source);
+endfunction
+
+
+
+
+
+
+
 
 // ================================================================
 // Privilege Modes

@@ -77,22 +77,13 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 
    let fall_through_inc = (rg_stage_input.is_i32_not_i16 ? 4 : 2); 
    let fall_through_pc = getPC(rg_pcc) + fall_through_inc;
-   //let fall_through_pc = alu_outputs.cf_info.fallthru_PC;
    let next_pc_local = ((alu_outputs.control == CONTROL_BRANCH)
                        ? alu_outputs.addr
                        : fall_through_pc);
 
-   //let next_pcc_addr = rg_stage_input.pred_fetch_addr;
-   let next_pcc_addr = alu_outputs.control == CONTROL_BRANCH
-                       ? getPCCBase (rg_pcc) + alu_outputs.addr
-                       : getAddr (toCapPipe (rg_pcc)) + fall_through_inc;
-
-
-   // TODO should be able to replace this with an addAddrUnsafe
-   let next_pcc_local = ((alu_outputs.control == CONTROL_CAPBRANCH)
+   let next_pcc_local = (alu_outputs.control == CONTROL_CAPBRANCH)
                         ? alu_outputs.pcc
-                        //: setPC(rg_pcc, next_pc_local).value); //TODO unrepresentable?
-                        : tuple2 (setAddrUnsafe (toCapPipe (rg_pcc), next_pcc_addr), getPCCBase (rg_pcc)));
+                        : setPC (rg_pcc, next_pc_local);
 
 
 
@@ -140,6 +131,10 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
                                                   instr_seq     : rg_stage_input.instr_seq,
 `endif
 					          op_stage2     : alu_outputs.op_stage2,
+`ifdef DELAY_STAGE1_TRAPS
+                                                  trap          : alu_outputs.trap,
+                                                  trap_info     : ?,
+`endif
 					          rd            : alu_outputs.rd,
 					          addr          : alu_outputs.addr,
                                                   mem_width_code: alu_outputs.mem_width_code,
@@ -183,10 +178,10 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 `endif
 					          priv          : cur_priv };
 
-      let fetch_exc = checkValid(rg_pcc, getTop(toCapPipe(rg_pcc)), rg_stage_input.is_i32_not_i16);
+      let fetch_exc = checkValid(rg_pcc, rg_stage_input.is_i32_not_i16);
 
       let redirect = (alu_outputs.control == CONTROL_CAPBRANCH)
-        ? (getAddr(toCapPipe(alu_outputs.pcc)) != rg_stage_input.pred_fetch_addr)
+        ? (getPCCAddr (alu_outputs.pcc) != rg_stage_input.pred_fetch_addr)
         : (next_pc_local != rg_stage_input.pred_fetch_addr - getPCCBase(rg_pcc));
 
 
@@ -214,6 +209,10 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
                                                      instr_seq: rg_stage_input.instr_seq,
 `endif
 						     op_stage2: OP_Stage2_ALU,
+`ifdef DELAY_STAGE1_TRAPS
+                                                     trap: False,
+                                                     trap_info : ?,
+`endif
 						     rd:        0,
 						     addr:      ?,
 						     val1:      ?,
@@ -284,12 +283,17 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
       else if (rg_stage_input.exc) begin
 	 output_stage1.ostatus   = OSTATUS_NONPIPE;
 	 output_stage1.control   = CONTROL_TRAP;
-	 output_stage1.trap_info = Trap_Info_Pipe {
+	 let trap_info           = Trap_Info_Pipe {
                                               epcc: rg_pcc,
 					      exc_code: rg_stage_input.exc_code,
                                               cheri_exc_code: ?,
                                               cheri_exc_reg: ?,
 					      tval:     rg_stage_input.tval};
+         output_stage1.trap_info = trap_info;
+`ifdef DELAY_STAGE1_TRAPS
+         data_to_stage2.trap = True;
+         data_to_stage2.trap_info = trap_info;
+`endif
 	 output_stage1.data_to_stage2 = data_to_stage2;
       end
 
@@ -329,6 +333,10 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
                                     cheri_exc_code: alu_outputs.cheri_exc_code,
                                     cheri_exc_reg: alu_outputs.cheri_exc_reg,
 				    tval:     tval};
+`ifdef DELAY_STAGE1_TRAPS
+         data_to_stage2.trap = alu_outputs.trap;
+         data_to_stage2.trap_info = trap_info;
+`endif
 
 	 output_stage1.ostatus        = ostatus;
 	 output_stage1.control        = alu_outputs.control;
