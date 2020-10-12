@@ -169,7 +169,7 @@ typedef enum { ISIZE16BIT, ISIZE32BIT
    } ISize deriving (Bits, Eq, FShow);
 
 typedef enum {
-   OP1_PC,
+   OP1_PC_ADDR,
    OP1_RS1,
    OP1_RS1_S,
    OP1_RS1_NEG,
@@ -180,7 +180,8 @@ typedef enum {
    OP1_RS1_B32_NEG,
 `endif
    OP1_RS1_REV,
-   OP1_RS1_MASKED
+   OP1_RS1_MASKED,
+   OP1_CHERI_OP1_BASE_NEG
 } ALU_Op1_Source deriving (Bits, Eq, FShow);
 
 typedef enum {
@@ -197,10 +198,13 @@ typedef enum {
    OP2_TYPE_UNSEALED,
    OP2_TYPE_SENTRY,
    OP2_KIND,
-   OP2_FALLTHRU_PC,
    OP2_CHERI_OP2_ADDR,
+   OP2_CHERI_OP2_BASE,
+   OP2_CHERI_OP1_BASE_NEG,
+   OP2_CHERI_OP2_BASE_NEG,
    OP2_ZERO,
-   OP2_TWO
+   OP2_TWO,
+   OP2_CHERI_OP1_TOP_NEG
 } ALU_Op2_Source deriving (Bits, Eq, FShow);
 
 typedef enum {
@@ -1162,7 +1166,7 @@ function  Bit #(XLEN)  fn_merge_immediate (Instr x);
    //Bit #(21) imm = signExtend (1'b1); // default to all 1s for testing
    Bit #(XLEN) imm = signExtend (1'b1); // default to all 1s for testing
         if (opcode == op_LUI)       imm = signExtend (instr_U_imm20  (x));
-   else if (opcode == op_AUIPC)     imm = signExtend (instr_U_imm20  (x));
+   else if (opcode == op_AUIPC)     imm = {signExtend (instr_U_imm20  (x)), 12'b0};
    else if (opcode == op_JAL)       imm = signExtend (instr_UJ_imm21 (x));
    else if (opcode == op_JALR)      imm = signExtend (instr_I_imm12  (x));
    else if (opcode == op_BRANCH)    imm = signExtend (instr_SB_imm13 (x));
@@ -1213,8 +1217,8 @@ endfunction
 
 
 function Tuple4 #(ALU_Op1_Source, ALU_Op2_Source, ALU_CompOp1_Source, ALU_CompOp2_Source) fn_select_operands (Instr instr);
-   let op1_source = OP1_RS1_REV;
-   let op2_source = OP2_RS2_NEG;
+   ALU_Op1_Source op1_source = OP1_RS1_REV;
+   ALU_Op2_Source op2_source = OP2_RS2_NEG;
    // op2_source used as CHERI internal op 2 when CHERI is enabled
    //let op1_source = ?;
    //let op2_source = ?;
@@ -1241,19 +1245,20 @@ function Tuple4 #(ALU_Op1_Source, ALU_Op2_Source, ALU_CompOp1_Source, ALU_CompOp
       op2_source = ?;
    end
    else if (opcode == op_AUIPC) begin
-      op1_source = OP1_PC;
-      op2_source = OP2_IMM_HIGH;
+      op1_source = OP1_PC_ADDR;
+      op2_source = OP2_IMM_S;
    end
    else if (opcode == op_JAL) begin
-      op1_source = OP1_PC;
+      op1_source = OP1_PC_ADDR;
       op2_source = OP2_IMM_S;
    end
    else if (opcode == op_JALR) begin
       op1_source = OP1_RS1;
-      op2_source = OP2_IMM_S;
+      op2_source = OP2_IMM_S; // TODO add stuff to this to do addr stuff instead of
+                              // offset stuff with pcc
    end
    else if (opcode == op_BRANCH) begin
-      op1_source = OP1_PC;
+      op1_source = OP1_PC_ADDR;
       op2_source = OP2_IMM_S;
       if (  funct3 == f3_BEQ
          || funct3 == f3_BNE
@@ -1475,6 +1480,8 @@ function Tuple4 #(ALU_Op1_Source, ALU_Op2_Source, ALU_CompOp1_Source, ALU_CompOp
                         op2_source = OP2_TYPE_SENTRY;
                      end
                      f5rs2_cap_CGetOffset: begin
+                        op1_source = OP1_RS1_NEG; // the address of CS1
+                        op2_source = OP2_CHERI_OP1_BASE_NEG;
                      end
                      f5rs2_cap_CGetPerm: begin
                      end

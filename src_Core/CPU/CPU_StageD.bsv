@@ -162,7 +162,9 @@ module mkCPU_StageD #(Bit #(4)  verbosity,
 							       instr_C:        instr_C,
 `endif
 `endif
+`ifndef DISABLE_BRANCH_PRED
 							       pred_fetch_addr:rg_data.pred_fetch_addr,
+`endif
 							       decoded_instr:  decoded_instr};
       end
 

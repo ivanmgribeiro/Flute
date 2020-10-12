@@ -109,10 +109,10 @@ typedef enum {
    CHERI_GET_PRECISION,
    CHERI_TEST_CONDITIONAL,
    CHERI_C_TO_PTR,
-   CHERI_NULL_CAP,
    CHERI_LOAD_CAP,
    CHERI_STORE_CAP,
-   CHERI_CCALL
+   CHERI_CCALL,
+   CHERI_ALU_SUM_OUTPUT
 } CHERI_Operation_Select deriving (Bits, FShow, Eq);
 
 typedef struct {
@@ -129,7 +129,12 @@ typedef struct {
    Bool alu_mem_unsigned;
    Bit #(3) alu_mem_width_code;
    Bool alu_illegal_instr;
-   Bool alu_add_ddc_addr_to_imm;
+   Bool alu_add_pcc_base_to_imm; // needed in order to calculate the address that we
+                                 // will be jumping to in a JALR
+   Bool alu_add_pcc_addr_to_imm;
+   Bool alu_add_ddc_addr_to_imm; // used for ddc-relative loads and stores, allows us
+                                 // to save an adder in the ALU which could be on the
+                                 // critical path
    Bool alu_ccall_rd;
 } CHERI_ALU_Control deriving (Bits, FShow, Eq);
 
@@ -186,6 +191,8 @@ function Tuple4 #(CHERI_Op_Sources, CHERI_Cap_Checks, CHERI_Operation_Select, CH
       alu_mem_width_code: 0,
       alu_illegal_instr: False,
       alu_add_ddc_addr_to_imm: False,
+      alu_add_pcc_addr_to_imm: False,
+      alu_add_pcc_base_to_imm: False,
       alu_ccall_rd: False
    };
 
@@ -229,16 +236,17 @@ function Tuple4 #(CHERI_Op_Sources, CHERI_Cap_Checks, CHERI_Operation_Select, CH
       cheri_alu_control.alu_mem_width_code = 1;
       cheri_alu_control.alu_bounds_inclusive = True;
       cheri_alu_control.alu_authority_id = {1'b0, scr_addr_PCC};
+
+
+      cheri_alu_control.alu_add_pcc_base_to_imm = True;
    end else if (opcode == op_AUIPC) begin
-      // TODO
-      //cheri_op_sources.cheri_op1_source = CHERI_OP_SOURCE_DDC;
-      //cheri_op_sources.cheri_op2_source = CHERI_OP_SOURCE_DDC;
-      //cheri_op_sources.cheri_authority_source = CHERI_OP_SOURCE_CS1;
       if (pcc_cap_mode_bit == 1'b1) begin
+         // TODO currently in the ALU the PCC won't have an offset.
          cheri_op_sources.cheri_op1_source = CHERI_OP_SOURCE_PCC;
          cheri_operation_select = CHERI_SET_OFFSET;
-         cheri_alu_control.alu_offset_inc_not_set = True;
+         cheri_alu_control.alu_offset_inc_not_set = False;
          cheri_alu_control.alu_val1_cap_not_int = True;
+         cheri_alu_control.alu_add_pcc_addr_to_imm = True;
       end
    end else if (  opcode == op_LOAD
                || opcode == op_MISC_MEM && valueOf (XLEN) == 64 && funct3 == f3_LQ) begin
@@ -704,7 +712,6 @@ function Tuple4 #(CHERI_Op_Sources, CHERI_Cap_Checks, CHERI_Operation_Select, CH
          //   addop1 = {getAddr (cs1_val), 1'b1};
          //   addop2 = {~(useDDC ? ddc_base : cs2_base), 1'b1};
          //end else begin
-         //   cheri_operation_select = CHERI_NULL_CAP;
          //end
       end
       f7_cap_CFromPtr: begin
@@ -719,7 +726,7 @@ function Tuple4 #(CHERI_Op_Sources, CHERI_Cap_Checks, CHERI_Operation_Select, CH
          //alu_outputs.internal_op2 = rs2_val;
       end
       f7_cap_CSub: begin
-         cheri_operation_select = CHERI_NONE;
+         cheri_operation_select = CHERI_ALU_SUM_OUTPUT;
          //alu_outputs.val1 = zeroExtend(getAddr(cs1_val) - getAddr(cs2_val));
          // TODO
          //addop1 = { (getAddr (cs1_val)), 1'b1};
@@ -1044,6 +1051,7 @@ function Tuple4 #(CHERI_Op_Sources, CHERI_Cap_Checks, CHERI_Operation_Select, CH
             cheri_alu_control.alu_seal_entry = True;
             cheri_alu_control.alu_bounds_inclusive = True;
             cheri_alu_control.alu_check_misaligned = True;
+            // TODO should be word-sized when ISA_C is not defined
             cheri_alu_control.alu_mem_width_code = w_SIZE_H;
 
             cap_checks.check_enable = True;
@@ -1098,56 +1106,21 @@ function Tuple4 #(CHERI_Op_Sources, CHERI_Cap_Checks, CHERI_Operation_Select, CH
 
          end
          f5rs2_cap_CGetType: begin
-            // TODO
+            cheri_op_sources.cheri_op1_source = CHERI_OP_SOURCE_CS1;
             cheri_operation_select = CHERI_GET_KIND;
-            //case (getKind(cs1_val)) matches
-            //   tagged UNSEALED: begin
-            //      alu_outputs.val1 = otype_unsealed_ext;
-            //   end
-            //   tagged SENTRY: begin
-            //      alu_outputs.val1 = otype_sentry_ext;
-            //   end
-            //   tagged RES0: begin
-            //      alu_outputs.val1 = otype_res0_ext;
-            //   end
-            //   tagged RES1: begin
-            //      alu_outputs.val1 = otype_res1_ext;
-            //   end
-            //   tagged SEALED_WITH_TYPE .otype: begin
-            //      alu_outputs.val1 = zeroExtend(otype);
-            //   end
-            //endcase // getKind (cs1_val)
          end
          default: begin
             cheri_alu_control.alu_illegal_instr = True;
-//`ifdef DELAY_STAGE1_TRAPS
-//            alu_outputs.trap = True;
-//            alu_outputs.control = CONTROL_TRAP;
-//`else
-//            alu_outputs.control = CONTROL_TRAP;
-//`endif
          end
       endcase // funct5rs2
       end
    default: begin
          cheri_alu_control.alu_illegal_instr = True;
-//`ifdef DELAY_STAGE1_TRAPS
-//      alu_outputs.trap = True;
-//      alu_outputs.control = CONTROL_TRAP;
-//`else
-//      alu_outputs.control = CONTROL_TRAP;
-//`endif
    end
    endcase // funct7
    end
    default: begin
       cheri_alu_control.alu_illegal_instr = True;
-//`ifdef DELAY_STAGE1_TRAPS
-//            alu_outputs.trap = True;
-//            alu_outputs.control = CONTROL_TRAP;
-//`else
-//            alu_outputs.control = CONTROL_TRAP;
-//`endif
       end
       endcase // funct3
    end

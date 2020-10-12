@@ -349,14 +349,28 @@ module mkCPU_Stage1 #(Bit #(4)         verbosity,
    // ---- Input
    //method Action enq (Data_StageD_to_Stage1  data) if (!(rg_rs1_busy || rg_rs1_busy));
    method Action enq (Data_StageD_to_Stage1  data);
+      if (verbosity > 1) begin
+         $display ("stage1 enq");
+         $display ("data: ", fshow(data));
+      end
+
       if (data.refresh_pcc) begin
          rw_fresh_pcc.wset(fresh_pcc);
       end
 
 `ifdef ISA_CHERI
       // add DDC address to immediate field when the decode stage tells us to
-      if ((tpl_4 (data.decoded_instr.cheri_info)).alu_add_ddc_addr_to_imm) begin
-         data.decoded_instr.imm = data.decoded_instr.imm + getAddr (ddc);
+      Bool add_ddc_to_imm = tpl_4 (data.decoded_instr.cheri_info).alu_add_ddc_addr_to_imm;
+      Bool add_pcc_a_to_imm = tpl_4 (data.decoded_instr.cheri_info).alu_add_pcc_addr_to_imm;
+      Bool add_pcc_b_to_imm = tpl_4 (data.decoded_instr.cheri_info).alu_add_pcc_base_to_imm;
+      PCC_T pcc_to_use = data.refresh_pcc ? fresh_pcc : stage1_outputs.next_pcc;
+      if (add_ddc_to_imm || add_pcc_a_to_imm || add_pcc_b_to_imm) begin
+         data.decoded_instr.imm = data.decoded_instr.imm + ( add_ddc_to_imm   ? getAddr (ddc)
+                                                           : add_pcc_a_to_imm ? getPCCAddr (pcc_to_use)
+                                                           : getPCCBase (pcc_to_use));
+         if (verbosity > 1) begin
+            $display ("immediate updated to: ", fshow(data.decoded_instr.imm));
+         end
       end
 `endif
 

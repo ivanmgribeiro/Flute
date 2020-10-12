@@ -75,16 +75,14 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
    
                                   );
 
-   let fall_through_inc = (rg_stage_input.is_i32_not_i16 ? 4 : 2); 
-   let fall_through_pc = getPC(rg_pcc) + fall_through_inc;
-   let next_pc_local = ((alu_outputs.control == CONTROL_BRANCH)
-                       ? alu_outputs.addr
-                       : fall_through_pc);
+   let fall_through_pc_addr = alu_outputs.cf_info.fallthru_PC;
+   let next_pc_addr_local = ((alu_outputs.control == CONTROL_BRANCH)
+                          ? alu_outputs.addr
+                          : fall_through_pc_addr);
 
    let next_pcc_local = (alu_outputs.control == CONTROL_CAPBRANCH)
                         ? alu_outputs.pcc
-                        : setPC (rg_pcc, next_pc_local);
-
+                        : setPCCAddr (rg_pcc, next_pc_addr_local);
 
 
 `ifdef RVFI
@@ -180,9 +178,13 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 
       let fetch_exc = checkValid(rg_pcc, rg_stage_input.is_i32_not_i16);
 
+`ifndef DISABLE_BRANCH_PRED
       let redirect = (alu_outputs.control == CONTROL_CAPBRANCH)
         ? (getPCCAddr (alu_outputs.pcc) != rg_stage_input.pred_fetch_addr)
-        : (next_pc_local != rg_stage_input.pred_fetch_addr - getPCCBase(rg_pcc));
+        : (next_pc_addr_local != rg_stage_input.pred_fetch_addr);
+`else
+      let redirect = alu_outputs.control == CONTROL_CAPBRANCH || alu_outputs.control == CONTROL_BRANCH;
+`endif
 
 
       Output_Stage1 output_stage1 = ?;
@@ -255,14 +257,22 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 
 `ifdef ISA_CHERI
       else if (isValid(fetch_exc)) begin
-	 output_stage1.ostatus   = OSTATUS_NONPIPE;
-	 output_stage1.control   = CONTROL_TRAP;
-	 output_stage1.trap_info = Trap_Info_Pipe {
+	 let trap_info = Trap_Info_Pipe {
                 exc_code: exc_code_CHERI,
                 cheri_exc_code : fetch_exc.Valid,
                 cheri_exc_reg : {1, scr_addr_PCC},
                 epcc: rg_pcc,
                 tval: rg_stage_input.tval};
+`ifdef DELAY_STAGE1_TRAPS
+         output_stage1.ostatus   = OSTATUS_PIPE;
+         output_stage1.control   = CONTROL_STRAIGHT;
+         data_to_stage2.trap      = True;
+         data_to_stage2.trap_info = trap_info;
+`else
+	 output_stage1.ostatus   = OSTATUS_NONPIPE;
+	 output_stage1.control   = CONTROL_TRAP;
+         output_stage1.trap_info = trap_info;
+`endif
 	 output_stage1.data_to_stage2 = data_to_stage2;
       end
 `endif
@@ -281,18 +291,21 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 
       // Trap on fetch-exception
       else if (rg_stage_input.exc) begin
-	 output_stage1.ostatus   = OSTATUS_NONPIPE;
-	 output_stage1.control   = CONTROL_TRAP;
 	 let trap_info           = Trap_Info_Pipe {
                                               epcc: rg_pcc,
 					      exc_code: rg_stage_input.exc_code,
                                               cheri_exc_code: ?,
                                               cheri_exc_reg: ?,
 					      tval:     rg_stage_input.tval};
-         output_stage1.trap_info = trap_info;
 `ifdef DELAY_STAGE1_TRAPS
-         data_to_stage2.trap = True;
+         output_stage1.ostatus   = OSTATUS_PIPE;
+         output_stage1.control   = CONTROL_STRAIGHT;
+         data_to_stage2.trap     = True;
          data_to_stage2.trap_info = trap_info;
+`else
+	 output_stage1.ostatus   = OSTATUS_NONPIPE;
+	 output_stage1.control   = CONTROL_TRAP;
+         output_stage1.trap_info = trap_info;
 `endif
 	 output_stage1.data_to_stage2 = data_to_stage2;
       end
@@ -336,11 +349,12 @@ module mkCPU_Stage1_syn (CPU_Stage1_syn_IFC);
 `ifdef DELAY_STAGE1_TRAPS
          data_to_stage2.trap = alu_outputs.trap;
          data_to_stage2.trap_info = trap_info;
+`else
+	 output_stage1.trap_info      = trap_info;
 `endif
 
 	 output_stage1.ostatus        = ostatus;
 	 output_stage1.control        = alu_outputs.control;
-	 output_stage1.trap_info      = trap_info;
 	 output_stage1.redirect       = redirect;
 	 output_stage1.cf_info        = alu_outputs.cf_info;
 	 output_stage1.data_to_stage2 = data_to_stage2;

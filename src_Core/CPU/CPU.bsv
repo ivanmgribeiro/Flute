@@ -1009,6 +1009,9 @@ module mkCPU (CPU_IFC);
    Bool break_into_Debug_Mode = False;
 `endif
 
+
+// THIS SHOULD NEVER HAPPEN
+/*
    rule rl_stage1_trap (   (rg_state == CPU_RUNNING)
 			&& (! halting)
 			&& (stage3.out.ostatus == OSTATUS_EMPTY)
@@ -1035,6 +1038,22 @@ module mkCPU (CPU_IFC);
 
       rg_state           <= CPU_TRAP;
    endrule: rl_stage1_trap
+*/
+
+   // THIS RULE SHOULD NEVER FIRE
+   rule rl_stage1_trap_test (   (rg_state == CPU_RUNNING)
+			    && (! halting)
+			    && (stage3.out.ostatus == OSTATUS_EMPTY)
+			    && (stage2.out.ostatus == OSTATUS_EMPTY)
+			    && (stage1.out.ostatus == OSTATUS_NONPIPE)
+			    && (stage1.out.control == CONTROL_TRAP)
+			    && (! break_into_Debug_Mode)
+			    && (stageF.out.ostatus != OSTATUS_BUSY)
+			    && f_run_halt_reqs_empty);
+      $display ("ERROR: REACHED A RULE THAT SHOULD NEVER EXECUTE");
+      $finish (1);
+   endrule: rl_stage1_trap_test
+
 
    // ================================================================
    // Traps
@@ -1181,7 +1200,7 @@ module mkCPU (CPU_IFC);
                                       cheri_exc_code: ?,
                                       cheri_exc_reg:  ?,
                                       exc_code: exc_code_ILLEGAL_INSTRUCTION,
-                                      tval:     stage1.out.trap_info.tval};
+                                      tval:     stage1.out.data_to_stage2.trap_info.tval};
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // Also used in successful CSSRW
 `ifdef INCLUDE_TANDEM_VERIF
@@ -1202,7 +1221,7 @@ module mkCPU (CPU_IFC);
       let rs1      = instr_rs1    (instr);
       let rd       = instr_rd     (instr);
 
-      let stage2_asr = getHardPerms(toCapPipe(rg_trap_info.epcc)).accessSysRegs;
+      let stage2_asr = getHardPerms(toCapPipeNoOffset (rg_trap_info.epcc)).accessSysRegs;
       let stage2_val1= extract_cap(rg_csr_val1);
 
       Bool read_not_write = rs1 == 0;
@@ -1326,7 +1345,7 @@ module mkCPU (CPU_IFC);
                                       epc:      stage1.out.data_to_stage2.pc,
 `endif
                                       exc_code: exc_code_ILLEGAL_INSTRUCTION,
-                                      tval:     stage1.out.trap_info.tval};
+                                      tval:     stage1.out.data_to_stage2.trap_info.tval};
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // Also used in successful CSSRW
 `ifdef INCLUDE_TANDEM_VERIF
@@ -1355,7 +1374,7 @@ module mkCPU (CPU_IFC);
 		      : extend (rs1));                    // CSRRWI
 
       Bool read_not_write = False;    // CSRRW always writes the CSR
-      let stage2_asr = getHardPerms(toCapPipe(rg_trap_info.epcc)).accessSysRegs;
+      let stage2_asr = getHardPerms(toCapPipeNoOffset (rg_trap_info.epcc)).accessSysRegs;
       AccessPerms permitted = csr_regfile.access_permitted_1 (rg_cur_priv, csr_addr, read_not_write);
 
       if (! permitted.exists || (permitted.requires_asr && !stage2_asr)) begin
@@ -1468,7 +1487,7 @@ module mkCPU (CPU_IFC);
                                       epc:      stage1.out.data_to_stage2.pc,
 `endif
                                       exc_code: exc_code_ILLEGAL_INSTRUCTION,
-                                      tval:     stage1.out.trap_info.tval};
+                                      tval:     stage1.out.data_to_stage2.trap_info.tval};
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // TODO: this is also used for successful CSRRW
 `ifdef INCLUDE_TANDEM_VERIF
@@ -1497,7 +1516,7 @@ module mkCPU (CPU_IFC);
 		      : extend (rs1));                   // CSRRSI, CSRRCI
 
       Bool read_not_write = (rs1_val == 0);    // CSRR_S_or_C only reads, does not write CSR, if rs1_val == 0
-      let stage2_asr = getHardPerms(toCapPipe(rg_trap_info.epcc)).accessSysRegs;
+      let stage2_asr = getHardPerms(toCapPipeNoOffset(rg_trap_info.epcc)).accessSysRegs;
       AccessPerms permitted = csr_regfile.access_permitted_2 (rg_cur_priv, csr_addr, read_not_write);
 
       if (! permitted.exists || (permitted.requires_asr && !stage2_asr)) begin

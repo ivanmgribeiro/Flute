@@ -236,7 +236,7 @@ instance PCC#(PCC_T);
         return tuple2 (tpl_1 (oldPCC), newAddr);
     endfunction
     function Addr getPC (PCC_T pcc);
-        return tpl_2 (pcc) - getPCCBase (pcc);
+        return getPCCAddr (pcc) - getPCCBase (pcc);
     endfunction
     function Addr getPCCAddr (PCC_T pcc);
         return tpl_2 (pcc);
@@ -259,6 +259,7 @@ instance PCC#(PCC_T);
     function Maybe#(CHERI_Exc_Code) checkValid (PCC_T pcc, Bool is_i32_not_i16);
         let toRet = Invalid;
         //TODO alignment checks?
+        let top = getPCCTop (pcc);
         CapPipe ac = almightyCap;
         if (!isValidCap(tpl_1(pcc)))
             toRet = Valid(exc_code_CHERI_Tag);
@@ -266,18 +267,20 @@ instance PCC#(PCC_T);
             toRet = Valid(exc_code_CHERI_Seal);
         else if (!getHardPerms(tpl_1(pcc)).permitExecute)
             toRet = Valid(exc_code_CHERI_XPerm);
-        else if (  (zeroExtend (getPCCAddr (pcc)) > getPCCTop (pcc))
-                || ( (zeroExtend (getPCCAddr (pcc)) + (is_i32_not_i16 ? 4 : 2)) > getPCCTop (pcc))
+        else if (  (zeroExtend (getPCCAddr (pcc)) > top)
+                || ( (zeroExtend (getPCCAddr (pcc)) + (is_i32_not_i16 ? 4 : 2)) > top)
                 || (getPCCAddr (pcc) < getPCCBase (pcc))
                 )
             toRet = Valid(exc_code_CHERI_Length);
         return toRet;
     endfunction
     function PCC_T fromCapPipe(CapPipe pcc);
-        return tuple2(setAddrUnsafe (pcc, getBase (pcc)), getAddr(pcc));
+        return tuple2(setAddr (pcc, getBase (pcc)).value, getAddr(pcc));
     endfunction
     function CapPipe toCapPipe(PCC_T pcc);
-        return setAddr (tpl_1 (pcc), tpl_2 (pcc));
+        // TODO what if this becomes inexact?
+        //return (setAddr (tpl_1 (pcc), tpl_2 (pcc))).value;
+        return setAddrUnsafe (tpl_1 (pcc), tpl_2 (pcc));
     endfunction
     function CapPipe toCapPipeNoOffset (PCC_T pcc);
         return tpl_1 (pcc);
@@ -410,7 +413,9 @@ typedef struct {
 
    Instr          instr;              // Valid if no exception
    Instr_C        instr_C;            // Valid if no exception; original compressed instruction
+`ifndef DISABLE_BRANCH_PRED
    WordXL         pred_fetch_addr;    // Predicted next pc
+`endif
    Decoded_Instr  decoded_instr;
    } Data_StageD_to_Stage1
 deriving (Bits);
@@ -423,7 +428,11 @@ instance FShow #(Data_StageD_to_Stage1);
       else begin
 	 if (x.is_i32_not_i16)
 	    fmt = fmt + $format ("  instr_C:%0h", x.instr_C);
+`ifndef DISABLE_BRANCH_PRED
 	 fmt = fmt + $format ("  instr:%0h  pred_fetch_addr:%0h", x.instr, x.pred_fetch_addr);
+`else
+         fmt = fmt + $format ("  instr:%0h", x.instr);
+`endif
       end
       fmt = fmt + $format ("}");
       return fmt;
@@ -459,7 +468,11 @@ typedef struct {
 
    Control                control;
 
+   // if stage1 traps are being delayed, we need to pass the trap info
+   // from stage1 to stage2 directly (rather than just to CPU.bsv)
+`ifndef DELAY_STAGE1_TRAPS
    Trap_Info_Pipe         trap_info;
+`endif
 
    // feedback
    Bool                   redirect;
@@ -491,7 +504,9 @@ instance FShow #(Output_Stage1);
 	 if (x.ostatus == OSTATUS_NONPIPE) begin
 	    fmt = fmt + $format (" NONPIPE: pc:%h", pc);
 	    fmt = fmt + $format (" ", fshow (x.control));
+`ifndef DELAY_STAGE1_TRAPS
 	    fmt = fmt + $format (" ", fshow (x.trap_info));
+`endif
 	 end
 	 else begin
 	    fmt = fmt + $format (" PIPE: ", fshow (x.control), " ", fshow (x.cf_info), fshow (x.data_to_stage2));
@@ -581,6 +596,10 @@ typedef struct {
    Dii_Id instr_seq;
 `endif
    Op_Stage2  op_stage2;
+`ifdef DELAY_STAGE1_TRAPS
+   Bool       trap;
+   Trap_Info_Pipe  trap_info;
+`endif
    RegName    rd;
    Addr       addr;     // Branch, jump: newPC
                         // Mem ops and AMOs: mem addr
@@ -665,7 +684,7 @@ typedef struct {
 
     Bit#(XLEN)  mem_addr;
 
-} Data_RVFI_Stage1 deriving (Bits, Eq);
+} Data_RVFI_Stage1 deriving (Bits, Eq, FShow);
 
 
 `endif
