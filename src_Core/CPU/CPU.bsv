@@ -242,6 +242,7 @@ module mkCPU (CPU_IFC);
    // These regs save info on a trap in Stage1 or Stage2
    Reg #(Trap_Info_Pipe) rg_trap_info       <- mkRegU;
    Reg #(Bool)       rg_trap_interrupt  <- mkRegU;
+   Reg #(CSR_SCR_Address) rg_csr_scr_address <- mkRegU;
    Reg #(Instr)      rg_trap_instr      <- mkRegU;
 `ifdef INCLUDE_TANDEM_VERIF
    Reg #(Trace_Data) rg_trap_trace_data <- mkRegU;
@@ -987,6 +988,7 @@ module mkCPU (CPU_IFC);
       rg_trap_info       <= stage2.out.trap_info;
       rg_trap_interrupt  <= False;
       rg_trap_instr      <= stage2.out.data_to_stage3.instr;
+      rg_csr_scr_address <= instr_csr_scr_addr (stage2.out.data_to_stage3.instr);
 `ifdef RVFI_DII
       rg_next_seq        <= stage2.out.data_to_stage3.instr_seq + 1;
 `endif
@@ -1027,6 +1029,7 @@ module mkCPU (CPU_IFC);
       rg_trap_info       <= stage1.out.trap_info;
       rg_trap_interrupt  <= False;
       rg_trap_instr      <= stage1.out.data_to_stage2.instr;
+      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
 `ifdef RVFI_DII
       rg_next_seq        <= stage1.out.data_to_stage2.instr_seq + 1;
 `endif
@@ -1072,6 +1075,9 @@ module mkCPU (CPU_IFC);
       let exc_code     = rg_trap_info.exc_code;
       let tval         = rg_trap_info.tval;
       let instr        = rg_trap_instr;
+
+      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
+      csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
       let is_interrupt = rg_trap_interrupt;
 
       // Take trap, save trap information for next phase
@@ -1203,6 +1209,9 @@ module mkCPU (CPU_IFC);
                                       tval:     stage1.out.data_to_stage2.trap_info.tval};
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // Also used in successful CSSRW
+
+      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
+      csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;
 `elsif RVFI
@@ -1218,6 +1227,7 @@ module mkCPU (CPU_IFC);
 
       let instr    = rg_trap_instr;
       let scr_addr = instr_rs2    (instr);
+      let scr_address = rg_csr_scr_address;
       let rs1      = instr_rs1    (instr);
       let rd       = instr_rd     (instr);
 
@@ -1248,13 +1258,19 @@ module mkCPU (CPU_IFC);
       end
       else begin
 	 // Read the SCR only if Rd is not 0
-	 CapReg scr_val = ?;
+	 CapPipe scr_val = ?;
          if (scr_addr == scr_addr_DDC) begin
             scr_val = cast(rg_ddc);
          end else
 	 if (rd != 0) begin
-	    let m_scr_val = csr_regfile.read_scr (scr_addr);
-	    scr_val   = fromMaybe (?, m_scr_val);
+	    //let m_scr_val = csr_regfile.read_scr (scr_addr);
+	    //let m_scr_val = csr_regfile.read_scr (scr_address);
+	    //scr_val   = fromMaybe (?, m_scr_val);
+	    scr_val = cast (csr_regfile.read_rsp);
+            if (cur_verbosity > 1) begin
+               $display ("would have requested address: ", fshow (scr_addr));
+               $display ("reading csr regfile (scr) returned ", fshow (scr_val));
+            end
 	 end
 
 	 // Writeback to GPR file
@@ -1269,8 +1285,11 @@ module mkCPU (CPU_IFC);
          rg_ddc <= stage2_val1;
    end else
    if (rs1 != 0) begin
-	    let new_scr_val <- csr_regfile.mav_scr_write (scr_addr, cast(stage2_val1));
-      new_scr_val_unpacked = cast(new_scr_val);
+	    //let new_scr_val <- csr_regfile.mav_scr_write (scr_addr, cast(stage2_val1));
+	    //let new_scr_val <- csr_regfile.mav_scr_write (scr_address, cast(stage2_val1));
+	    //let new_scr_val <- csr_regfile.mav_scr_write (scr_address, cast(stage2_val1));
+            //new_scr_val_unpacked = cast(new_scr_val);
+	    new_scr_val_unpacked <- csr_regfile.write_req (scr_address, cast(stage2_val1));
    end
 
 	 // Accounting
@@ -1348,6 +1367,9 @@ module mkCPU (CPU_IFC);
                                       tval:     stage1.out.data_to_stage2.trap_info.tval};
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // Also used in successful CSSRW
+
+      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
+      csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;
 `elsif RVFI
@@ -1400,8 +1422,13 @@ module mkCPU (CPU_IFC);
 	 if (rd != 0) begin
 	    begin
 	       // Note: csr_regfile.read should become ActionValue if it acquires side effects
-	       let m_csr_val = csr_regfile.read_csr (csr_addr);
-	       csr_val   = fromMaybe (?, m_csr_val);
+	       //let m_csr_val = csr_regfile.read_csr (csr_addr);
+	       //csr_val   = fromMaybe (?, m_csr_val);
+	       csr_val = getAddr (csr_regfile.read_rsp);
+               if (cur_verbosity > 1) begin
+               $display ("would have requested address: ", fshow (csr_addr));
+                  $display ("reading csr regfile (csr) returned ", fshow (csr_val));
+               end
 	    end
 	 end
 
@@ -1415,9 +1442,10 @@ module mkCPU (CPU_IFC);
 `endif
 
 	 // Writeback to CSR file
-	 let csr_write_result <- csr_regfile.mav_csr_write (csr_addr, rs1_val);
-	 let new_csr_val       = csr_write_result.new_csr_value;
-	 let m_new_mstatus     = csr_write_result.m_new_csr_value2;
+	 //let csr_write_result <- csr_regfile.mav_csr_write (csr_addr, rs1_val);
+	 //let new_csr_val       = csr_write_result.new_csr_value;
+	 //let m_new_mstatus     = csr_write_result.m_new_csr_value2;
+	 let new_csr_val <- csr_regfile.write_req (rg_csr_scr_address, nullWithAddr (rs1_val));
 
 	 // Accounting
 	 csr_regfile.csr_minstret_incr;
@@ -1490,6 +1518,9 @@ module mkCPU (CPU_IFC);
                                       tval:     stage1.out.data_to_stage2.trap_info.tval};
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // TODO: this is also used for successful CSRRW
+
+      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
+      csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;    // TODO: this is also used for successful CSRRW
 `elsif RVFI
@@ -1541,8 +1572,13 @@ module mkCPU (CPU_IFC);
 	 WordXL csr_val = ?;
 	 begin
 	    // Note: csr_regfile.read should become ActionValue if it acquires side effects
-	    let m_csr_val  = csr_regfile.read_csr (csr_addr);
-	    csr_val = fromMaybe (?, m_csr_val);
+	    //let m_csr_val  = csr_regfile.read_csr (csr_addr);
+	    //csr_val = fromMaybe (?, m_csr_val);
+	    csr_val = getAddr (csr_regfile.read_rsp);
+            if (cur_verbosity > 1) begin
+               $display ("would have requested address: ", fshow (csr_addr));
+               $display ("reading csr regfile (csr) returned ", fshow (csr_val));
+            end
 	 end
 
 	 // Writeback to GPR file
@@ -2125,6 +2161,7 @@ module mkCPU (CPU_IFC);
 				       tval:     0};
       rg_trap_interrupt  <= True;
       rg_trap_instr      <= stage1.out.data_to_stage2.instr;
+      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
 
 `ifdef INCLUDE_TANDEM_VERIF
       // rg_trap_trace_data <= ?;    // Will be filled in in rl_trap
