@@ -35,6 +35,7 @@ import Vector       :: *;
 import FIFOF        :: *;
 import GetPut       :: *;
 import ClientServer :: *;
+import BRAMCore :: *;
 
 // BSV additional libs
 
@@ -62,6 +63,9 @@ import CSR_MIE     :: *;
 import CHERICap     :: *;
 import CHERICC_Fat  :: *;
 `endif
+
+import ISA_Decls_CSR :: *;
+
 
 // ================================================================
 // Writing a CSR can update multiple CSRs (e.g., writing
@@ -278,6 +282,14 @@ interface CSR_RegFile_IFC;
    // Debugging this module
 
    method Action debug;
+
+   // ----------------
+   // Register file access
+   method Action read_req (CSR_SCR_Address regname);
+
+   method CapPipe read_rsp ();
+
+   method ActionValue #(CapPipe) write_req (CSR_SCR_Address regname, CapPipe data);
 endinterface
 
 // ================================================================
@@ -343,7 +355,7 @@ endfunction
 // ================================================================
 // Major states of mkCSR_RegFile module
 
-typedef enum { RF_RESET_START, RF_RUNNING } RF_State
+typedef enum { RF_RESET_START, RF_RESET_LOOP, RF_RESET_FINISH, RF_RUNNING } RF_State
 deriving (Eq, Bits, FShow);
 
 // ================================================================
@@ -515,7 +527,40 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    // BEHAVIOR: RESET
    // Initialize some CSRs.
 
+   //RegFile #(CSR_SCR_RegName, CapReg) regfile <- mkRegFile (unpack (0), CSR_DSCRATCH1);
+   // TODO find a better way of setting this size (first argument is number of CapRegs stored
+   BRAM_DUAL_PORT #(CSR_SCR_RegName, CapReg) bram <- mkBRAMCore2 (15, False);
+   Reg #(Bool) rg_read_from_bram <- mkRegU;
+   Reg #(CapPipe) rg_csr_scr_read_val <- mkRegU;
+
+
+   // only use the first port in the BRAM for reads, and only use the second
+   // for writing
+   // this is to try to get it to infer only one FPGA BRAM
+   let read_port = bram.a;
+   let write_port = bram.b;
+
+   // TODO make this an appropriate size to cycle through the available
+   // registers
+   Reg #(CSR_SCR_RegName) rg_i <- mkReg ( unpack(0));
    rule rl_reset_start (rg_state == RF_RESET_START);
+      rg_i <= unpack (0);
+      rg_state <= RF_RESET_LOOP;
+   endrule
+
+   rule rl_reset_loop (rg_state == RF_RESET_LOOP);
+      let next = pack (rg_i) + 1;
+      rg_i <= unpack (next);
+      write_port.put(True, rg_i, nullCap);
+      if (rg_i == CSR_DSCRATCH1) begin
+         // last register is being reset, go to RF_RESET_FINISH
+         // while we still have it
+         // TODO change this to RF_RUNNING when RF_RESET_FINISH is removed
+         rg_state <= RF_RESET_FINISH;
+      end
+   endrule
+
+   rule rl_reset_finish (rg_state == RF_RESET_FINISH);
       // User-level CSRs
 `ifdef ISA_F
       rg_fflags <= 0;
@@ -1912,6 +1957,8 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 
 `ifdef INCLUDE_GDB_CONTROL
    // Read dpcc
+   // TODO will need to split this into multiple cycles
+   // Otherwise the regfile won't be inferred
    method CapPipe read_dpcc ();
       return rg_dpcc;
    endmethod
@@ -1931,11 +1978,15 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    endmethod
 
    // Read dcsr.step
+   // TODO need to split this into multiple actions, or split off this particular
+   // bit of the register and store it in a Reg #(Bool)
    method Bool read_dcsr_step ();
       return unpack (rg_dcsr [2]);
    endmethod
 
    // Update 'cause' and 'priv' in DCSR
+   // TODO will need to split this into multiple cycles
+   // Otherwise the regfile won't be inferred
    method Action write_dcsr_cause_priv (DCSR_Cause  cause, Priv_Mode  priv);
       Bit #(3) b3 = pack (cause);
       rg_dcsr <= { rg_dcsr [31:9], b3, rg_dcsr [5:2], priv };
@@ -1960,6 +2011,58 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
       $display ("sie     = 0x%0h", csr_mie.mv_sie_read);
 `endif
    endmethod      
+
+   // ----------------
+   // Register file access
+   method Action read_req (CSR_SCR_Address addr);
+      $display ("read request registered. addr: ", fshow(addr));
+      case (addr) matches
+         tagged RegFile_Index .name: begin
+            read_port.put (False, name, ?);
+            rg_read_from_bram <= True;
+         end
+         tagged CSR_Address .csr_addr: begin
+            rg_read_from_bram <= False;
+            let read_val = fv_csr_read (csr_addr);
+            if (isValid (read_val)) begin
+               rg_csr_scr_read_val <= nullWithAddr (read_val.Valid);
+            end
+         end
+         tagged SCR_Address .scr_addr: begin
+            rg_read_from_bram <= False;
+            let read_val = fv_scr_read (scr_addr);
+            if (isValid (read_val)) begin
+               rg_csr_scr_read_val <= cast (read_val.Valid);
+            end
+         end
+      endcase
+   endmethod
+
+   method CapPipe read_rsp ();
+      if (rg_read_from_bram) begin
+         return cast (read_port.read);
+      end else begin
+         return rg_csr_scr_read_val;
+      end
+   endmethod
+
+   method ActionValue #(CapPipe) write_req (CSR_SCR_Address addr, CapPipe data);
+      $display ("write request, addr: ", fshow (addr), " value: ", fshow(data));
+      case (addr) matches
+         tagged RegFile_Index .name: begin
+            write_port.put (True, name, cast (data));
+            return data;
+         end
+         tagged CSR_Address .csr_addr: begin
+            let tmp <- fav_csr_write (csr_addr, getAddr (data));
+            return nullWithAddr (tmp.new_csr_value);
+         end
+         tagged SCR_Address .scr_addr: begin
+            let tmp <- fav_scr_write (scr_addr, cast (data));
+            return cast (tmp);
+         end
+      endcase
+   endmethod
 endmodule
 
 // ================================================================
