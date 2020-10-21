@@ -60,6 +60,7 @@ import AXI4Lite   :: *;
 // Project imports
 
 import ISA_Decls :: *;
+import ISA_Decls_CSR :: *;
 
 import TV_Info   :: *;
 
@@ -130,6 +131,7 @@ typedef enum {CPU_RESET1,
 	      CPU_RUNNING,          // Normal operation
 	      CPU_TRAP,
 	      CPU_START_TRAP_HANDLER,
+	      CPU_xRET,
 	      CPU_CSRRW_2,
 	      CPU_CSRR_S_or_C_2,
 `ifdef ISA_CHERI
@@ -242,7 +244,6 @@ module mkCPU (CPU_IFC);
    // These regs save info on a trap in Stage1 or Stage2
    Reg #(Trap_Info_Pipe) rg_trap_info       <- mkRegU;
    Reg #(Bool)       rg_trap_interrupt  <- mkRegU;
-   Reg #(CSR_SCR_Address) rg_csr_scr_address <- mkRegU;
    Reg #(Instr)      rg_trap_instr      <- mkRegU;
 `ifdef INCLUDE_TANDEM_VERIF
    Reg #(Trace_Data) rg_trap_trace_data <- mkRegU;
@@ -988,7 +989,6 @@ module mkCPU (CPU_IFC);
       rg_trap_info       <= stage2.out.trap_info;
       rg_trap_interrupt  <= False;
       rg_trap_instr      <= stage2.out.data_to_stage3.instr;
-      rg_csr_scr_address <= instr_csr_scr_addr (stage2.out.data_to_stage3.instr);
 `ifdef RVFI_DII
       rg_next_seq        <= stage2.out.data_to_stage3.instr_seq + 1;
 `endif
@@ -997,6 +997,9 @@ module mkCPU (CPU_IFC);
 `elsif RVFI
       rg_trap_trace_data <= Right(stage2.out.data_to_stage3);
 `endif
+
+      // read the xTCC from BRAM so it is available in the csr_regfile
+      csr_regfile.read_req (rg_cur_priv == m_Priv_Mode ? RegFile_Index (SCR_MTCC) : RegFile_Index (SCR_STCC));
 
       rg_state           <= CPU_TRAP;
    endrule: rl_stage2_nonpipe
@@ -1029,7 +1032,6 @@ module mkCPU (CPU_IFC);
       rg_trap_info       <= stage1.out.trap_info;
       rg_trap_interrupt  <= False;
       rg_trap_instr      <= stage1.out.data_to_stage2.instr;
-      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
 `ifdef RVFI_DII
       rg_next_seq        <= stage1.out.data_to_stage2.instr_seq + 1;
 `endif
@@ -1076,8 +1078,6 @@ module mkCPU (CPU_IFC);
       let tval         = rg_trap_info.tval;
       let instr        = rg_trap_instr;
 
-      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
-      csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
       let is_interrupt = rg_trap_interrupt;
 
       // Take trap, save trap information for next phase
@@ -1210,7 +1210,6 @@ module mkCPU (CPU_IFC);
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // Also used in successful CSSRW
 
-      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
       csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;
@@ -1227,7 +1226,7 @@ module mkCPU (CPU_IFC);
 
       let instr    = rg_trap_instr;
       let scr_addr = instr_rs2    (instr);
-      let scr_address = rg_csr_scr_address;
+      let scr_address = instr_csr_scr_addr (instr);
       let rs1      = instr_rs1    (instr);
       let rd       = instr_rd     (instr);
 
@@ -1239,6 +1238,8 @@ module mkCPU (CPU_IFC);
 
       if (! permitted.exists || (permitted.requires_asr && !stage2_asr)) begin
 	 rg_state <= CPU_TRAP;
+         // read xTCC for trap handling
+         csr_regfile.read_req (rg_cur_priv == m_Priv_Mode ? RegFile_Index (SCR_MTCC) : RegFile_Index (SCR_STCC));
 
          if (permitted.exists) begin // Failed because of ASR
            let trap_info = rg_trap_info;
@@ -1284,11 +1285,37 @@ module mkCPU (CPU_IFC);
    if (scr_addr == scr_addr_DDC) begin
          rg_ddc <= stage2_val1;
    end else
+
+         // for some SCRs that extend vanilla RISC-V CSRs, the offset needs to maintain
+         // certain properties (for example, the bottom bits of MEPC & SEPC)
+         // However, in CHERI we can have sealed capabilities that should never be changed.
+         // In order to reconcile these, we modify the sealed capabilities but also untag them
+         if (scr_address == RegFile_Index (SCR_SEPCC) || scr_address == RegFile_Index (SCR_MEPCC)) begin
+            Bit #(2) bounds_lsb = getBaseAlignment (stage2_val1);
+            Bit #(2) addr_lsb   = truncate (getAddr (stage2_val1));
+            WordXL new_addr = getAddr (stage2_val1);
+            Bool needs_change = False;
+`ifdef ISA_C
+            if (addr_lsb[0] != bounds_lsb[0]) begin
+               // bottom bit of offset is non-zero; we will need to update it
+               needs_change = True;
+               new_addr[0] = bounds_lsb[0];
+            end
+`else
+            if (addr_lsb[1:0] != bounds_lsb[1:0]) begin
+               // bottom bit of offset is non-zero; we will need to update it
+               needs_change = True;
+               new_addr[1:0] = bounds_lsb[1:0];
+            end
+`endif
+            //stage2_val1 = setAddrUnsafe (stage2_val1, new_addr);
+            stage2_val1 = setAddrLSB (stage2_val1, bounds_lsb);
+
+            if (needs_change && getKind (stage2_val1) != UNSEALED) begin
+               stage2_val1 = setValidCap (stage2_val1, False);
+            end
+         end
    if (rs1 != 0) begin
-	    //let new_scr_val <- csr_regfile.mav_scr_write (scr_addr, cast(stage2_val1));
-	    //let new_scr_val <- csr_regfile.mav_scr_write (scr_address, cast(stage2_val1));
-	    //let new_scr_val <- csr_regfile.mav_scr_write (scr_address, cast(stage2_val1));
-            //new_scr_val_unpacked = cast(new_scr_val);
 	    new_scr_val_unpacked <- csr_regfile.write_req (scr_address, cast(stage2_val1));
    end
 
@@ -1368,7 +1395,6 @@ module mkCPU (CPU_IFC);
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // Also used in successful CSSRW
 
-      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
       csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;
@@ -1381,12 +1407,14 @@ module mkCPU (CPU_IFC);
 
    // ----------------
 
+   (* mutually_exclusive = "rl_stage1_CSRR_W_2, rl_stage1_CSRR_S_or_C_2" *)
    rule rl_stage1_CSRR_W_2 (   (rg_state == CPU_CSRRW_2)
 			    && f_run_halt_reqs_empty);
       if (cur_verbosity > 1) $display ("%0d: %m.rl_stage1_CSRR_W_2", mcycle);
 
       let instr    = rg_trap_instr;
       let csr_addr = instr_csr    (instr);
+      let scr_address = instr_csr_scr_addr (instr);
       let rs1      = instr_rs1    (instr);
       let funct3   = instr_funct3 (instr);
       let rd       = instr_rd     (instr);
@@ -1401,6 +1429,8 @@ module mkCPU (CPU_IFC);
 
       if (! permitted.exists || (permitted.requires_asr && !stage2_asr)) begin
 	 rg_state <= CPU_TRAP;
+         // read xTCC for trap handling
+         csr_regfile.read_req (rg_cur_priv == m_Priv_Mode ? RegFile_Index (SCR_MTCC) : RegFile_Index (SCR_STCC));
 
          if (permitted.exists) begin // Failed because of ASR
            let trap_info = rg_trap_info;
@@ -1442,10 +1472,8 @@ module mkCPU (CPU_IFC);
 `endif
 
 	 // Writeback to CSR file
-	 //let csr_write_result <- csr_regfile.mav_csr_write (csr_addr, rs1_val);
-	 //let new_csr_val       = csr_write_result.new_csr_value;
-	 //let m_new_mstatus     = csr_write_result.m_new_csr_value2;
-	 let new_csr_val <- csr_regfile.write_req (rg_csr_scr_address, nullWithAddr (rs1_val));
+         let updated_scr = csr_regfile.fv_update_scr_via_csr (csr_regfile.read_rsp, rs1_val, False);
+	 let new_csr_val <- csr_regfile.write_req (scr_address, updated_scr);
 
 	 // Accounting
 	 csr_regfile.csr_minstret_incr;
@@ -1519,7 +1547,6 @@ module mkCPU (CPU_IFC);
       rg_trap_interrupt <= False;
       rg_trap_instr     <= stage1.out.data_to_stage2.instr;    // TODO: this is also used for successful CSRRW
 
-      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
       csr_regfile.read_req (instr_csr_scr_addr (stage1.out.data_to_stage2.instr));
 `ifdef INCLUDE_TANDEM_VERIF
       rg_trap_trace_data <= stage1.out.data_to_stage2.trace_data;    // TODO: this is also used for successful CSRRW
@@ -1538,6 +1565,7 @@ module mkCPU (CPU_IFC);
 
       let instr    = rg_trap_instr;
       let csr_addr = instr_csr    (instr);
+      let csr_scr_address = instr_csr_scr_addr (instr);
       let rs1      = instr_rs1    (instr);
       let funct3   = instr_funct3 (instr);
       let rd       = instr_rd     (instr);
@@ -1548,10 +1576,12 @@ module mkCPU (CPU_IFC);
 
       Bool read_not_write = (rs1_val == 0);    // CSRR_S_or_C only reads, does not write CSR, if rs1_val == 0
       let stage2_asr = getHardPerms(toCapPipeNoOffset(rg_trap_info.epcc)).accessSysRegs;
-      AccessPerms permitted = csr_regfile.access_permitted_2 (rg_cur_priv, csr_addr, read_not_write);
+      AccessPerms permitted = csr_regfile.access_permitted_1 (rg_cur_priv, csr_addr, read_not_write);
 
       if (! permitted.exists || (permitted.requires_asr && !stage2_asr)) begin
 	 rg_state <= CPU_TRAP;
+         // read xTCC for trap handling
+         csr_regfile.read_req (rg_cur_priv == m_Priv_Mode ? RegFile_Index (SCR_MTCC) : RegFile_Index (SCR_STCC));
 
          if (permitted.exists) begin // Failed because of ASR
            let trap_info = rg_trap_info;
@@ -1597,9 +1627,9 @@ module mkCPU (CPU_IFC);
 		     ? (csr_val | rs1_val)                // CSRRS, CSRRSI
 		     : csr_val & (~ rs1_val));            // CSRRC, CSRRCI
 
-	    let csr_write_result <- csr_regfile.mav_csr_write (csr_addr, x);
-	    new_csr_val           = csr_write_result.new_csr_value;
-	    m_new_mstatus         = csr_write_result.m_new_csr_value2;
+            let updated_scr = csr_regfile.fv_update_scr_via_csr (csr_regfile.read_rsp, x, False);
+            let new_csr_val_cap <- csr_regfile.write_req (csr_scr_address, updated_scr);
+            new_csr_val = unpack (getAddr (new_csr_val_cap));
 	 end
 
 	 // Accounting
@@ -1655,7 +1685,30 @@ module mkCPU (CPU_IFC);
    // ================================================================
    // Stage1: nonpipe special: MRET/SRET/URET
 
-   rule rl_stage1_xRET (   (rg_state == CPU_RUNNING)
+   // this rule is required because in CHERI we need to make a regfile read request
+   // before we can actually perform the xRET so we have the value of xEPCC
+   rule rl_stage1_xRET_1 (   (rg_state == CPU_RUNNING)
+			  && (! halting)
+			  && (stage3.out.ostatus == OSTATUS_EMPTY)
+			  && (stage2.out.ostatus == OSTATUS_EMPTY)
+			  && (stage1.out.ostatus == OSTATUS_NONPIPE)
+			  && (   (stage1.out.control == CONTROL_MRET)
+			      || (stage1.out.control == CONTROL_SRET)
+			      || (stage1.out.control == CONTROL_URET))
+			  && (stageF.out.ostatus != OSTATUS_BUSY)
+			  && f_run_halt_reqs_empty);
+      Priv_Mode from_priv = ((stage1.out.control == CONTROL_MRET) ?
+			     m_Priv_Mode : ((stage1.out.control == CONTROL_SRET) ?
+					    s_Priv_Mode : u_Priv_Mode));
+      if (from_priv == m_Priv_Mode) begin
+         csr_regfile.read_req (RegFile_Index (SCR_MEPCC));
+      end else begin
+         csr_regfile.read_req (RegFile_Index (SCR_SEPCC));
+      end
+      rg_state <= CPU_xRET;
+   endrule: rl_stage1_xRET_1
+
+   rule rl_stage1_xRET_2 (   (rg_state == CPU_xRET)
 			&& (! halting)
 			&& (stage3.out.ostatus == OSTATUS_EMPTY)
 			&& (stage2.out.ostatus == OSTATUS_EMPTY)
@@ -1720,7 +1773,7 @@ module mkCPU (CPU_IFC);
       fa_emit_instr_trace (minstret, stage1.out.data_to_stage2.pcc, stage1.out.data_to_stage2.instr, rg_cur_priv);
       if (cur_verbosity != 0)
 	 $display ("    xRET: next_pc:0x%0h  new mstatus:0x%0h  new priv:%0d", next_pc, new_mstatus, new_priv);
-   endrule: rl_stage1_xRET
+   endrule: rl_stage1_xRET_2
 
    // ================================================================
    // Stage1: nonpipe special: FENCE.I
@@ -2161,7 +2214,6 @@ module mkCPU (CPU_IFC);
 				       tval:     0};
       rg_trap_interrupt  <= True;
       rg_trap_instr      <= stage1.out.data_to_stage2.instr;
-      rg_csr_scr_address <= instr_csr_scr_addr (stage1.out.data_to_stage2.instr);
 
 `ifdef INCLUDE_TANDEM_VERIF
       // rg_trap_trace_data <= ?;    // Will be filled in in rl_trap
@@ -2172,6 +2224,8 @@ module mkCPU (CPU_IFC);
 `endif
 
       rg_state           <= CPU_TRAP;
+      // read xTCC for trap handling
+      csr_regfile.read_req (rg_cur_priv == m_Priv_Mode ? RegFile_Index (SCR_MTCC) : RegFile_Index (SCR_STCC));
    endrule: rl_stage1_interrupt
 
    // ================================================================
@@ -2384,8 +2438,9 @@ module mkCPU (CPU_IFC);
    rule rl_debug_write_csr ((rg_state == CPU_DEBUG_MODE) && f_csr_reqs.first.write);
       let req <- pop (f_csr_reqs);
       Bit #(12) csr_addr = req.address;
+      let csr_scr_address = fn_csr_addr_to_regname (csr_addr);
       let data = req.data;
-      let new_csr_val <- csr_regfile.mav_csr_write (csr_addr, data);
+      let new_csr_val <- csr_regfile.write_req (csr_scr_address, data);
 
       let rsp = DM_CPU_Rsp {ok: True, data: ?};
       f_csr_rsps.enq (rsp);
