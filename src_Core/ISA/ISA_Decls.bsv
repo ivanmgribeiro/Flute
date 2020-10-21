@@ -201,7 +201,8 @@ function CSR_SCR_Address instr_csr_scr_addr (Instr x);
       // SCR address is stored in RS2
       return fn_scr_addr_to_regname (instr_rs2 (x));
    end else begin
-      return SCR_Address (scr_addr_MTCC);
+      // placeholder
+      return RegFile_Index (CSR_DSCRATCH0);
    end
 endfunction
 
@@ -243,7 +244,6 @@ typedef struct {
    RegName   rs2;
    RegName   rs3;
    CSR_Addr  csr;
-   //CSR_Addr  csr;
    CSR_SCR_Address csr_scr_addr;
 
    Bit #(3)  funct3;
@@ -276,8 +276,6 @@ function Decoded_Instr fv_decode (Instr instr);
 			 rs1:       instr_rs1      (instr),
 			 rs2:       instr_rs2      (instr),
 			 rs3:       instr_rs3      (instr),
-			 //csr:       instr_csr      (instr),
-                         csr_scr_addr: instr_csr_scr_addr (instr),
 
 			 funct3:    instr_funct3   (instr),
 			 funct5:    instr_funct5   (instr),
@@ -1101,10 +1099,21 @@ typedef union tagged {
 
 function CSR_SCR_Address fn_csr_addr_to_regname (CSR_Addr addr);
    case (addr)
+      // machine mode
       csr_addr_mscratch:   return RegFile_Index (CSR_MSCRATCH);
+      csr_addr_mtvec:      return RegFile_Index (SCR_MTCC);
+      csr_addr_mepc:       return RegFile_Index (SCR_MEPCC);
+      // supervisor mode
+      csr_addr_stvec:      return RegFile_Index (SCR_STCC);
+      csr_addr_sepc:       return RegFile_Index (SCR_SEPCC);
       csr_addr_sscratch:   return RegFile_Index (CSR_MSCRATCH);
+      // debug
       csr_addr_dscratch0:  return RegFile_Index (CSR_DSCRATCH0);
       csr_addr_dscratch1:  return RegFile_Index (CSR_DSCRATCH1);
+      csr_addr_tselect:    return RegFile_Index (CSR_TSELECT);
+      csr_addr_tdata1:     return RegFile_Index (CSR_TDATA1);
+      csr_addr_tdata2:     return RegFile_Index (CSR_TDATA2);
+      csr_addr_tdata3:     return RegFile_Index (CSR_TDATA3);
       default:             return CSR_Address (addr);
    endcase
 endfunction
@@ -1112,16 +1121,18 @@ endfunction
 function CSR_SCR_Address fn_scr_addr_to_regname (SCR_Addr addr);
    case (addr)
       scr_addr_MTDC:       return RegFile_Index (SCR_MTDC);
-      scr_addr_MScratchC:  return RegFile_Index (SCR_SSCRATCHC);
+      scr_addr_MTCC:       return RegFile_Index (SCR_MTCC);
+      scr_addr_MScratchC:  return RegFile_Index (SCR_MSCRATCHC);
+      scr_addr_MEPCC:      return RegFile_Index (SCR_MEPCC);
 
       scr_addr_STDC:       return RegFile_Index (SCR_STDC);
+      scr_addr_STCC:       return RegFile_Index (SCR_STCC);
       scr_addr_SScratchC:  return RegFile_Index (SCR_SSCRATCHC);
+      scr_addr_SEPCC:      return RegFile_Index (SCR_SEPCC);
 
       default:             return SCR_Address (addr);
    endcase
 endfunction
-
-
 
 // ----------------
 // User-level CSR addresses
