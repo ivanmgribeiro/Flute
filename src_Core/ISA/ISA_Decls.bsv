@@ -1567,14 +1567,21 @@ typedef union tagged {
 
 function CSR_SCR_Address fn_csr_addr_to_regname (CSR_Addr addr);
    case (addr)
+      // machine mode
       csr_addr_mscratch:   return RegFile_Index (CSR_MSCRATCH);
-      csr_addr_sscratch:   return RegFile_Index (CSR_MSCRATCH);
-      csr_addr_dscratch0:  return RegFile_Index (CSR_DSCRATCH0);
-      csr_addr_dscratch1:  return RegFile_Index (CSR_DSCRATCH1);
       csr_addr_mtvec:      return RegFile_Index (SCR_MTCC);
       csr_addr_mepc:       return RegFile_Index (SCR_MEPCC);
+      // supervisor mode
       csr_addr_stvec:      return RegFile_Index (SCR_STCC);
       csr_addr_sepc:       return RegFile_Index (SCR_SEPCC);
+      csr_addr_sscratch:   return RegFile_Index (CSR_MSCRATCH);
+      // debug
+      csr_addr_dscratch0:  return RegFile_Index (CSR_DSCRATCH0);
+      csr_addr_dscratch1:  return RegFile_Index (CSR_DSCRATCH1);
+      csr_addr_tselect:    return RegFile_Index (CSR_TSELECT);
+      csr_addr_tdata1:     return RegFile_Index (CSR_TDATA1);
+      csr_addr_tdata2:     return RegFile_Index (CSR_TDATA2);
+      csr_addr_tdata3:     return RegFile_Index (CSR_TDATA3);
       default:             return CSR_Address (addr);
    endcase
 endfunction

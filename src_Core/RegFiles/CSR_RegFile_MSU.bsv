@@ -330,7 +330,7 @@ endfunction
 // ================================================================
 // Major states of mkCSR_RegFile module
 
-typedef enum { RF_RESET_START, RF_RESET_LOOP, RF_RESET_FINISH, RF_RUNNING } RF_State
+typedef enum { RF_RESET_START, RF_RESET_LOOP, RF_RUNNING } RF_State
 deriving (Eq, Bits, FShow);
 
 // ================================================================
@@ -436,12 +436,6 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    Reg #(Bit #(64))   rg_mcycle <- mkReg (0);
 `endif
 
-   // Debug/Trace
-   Reg #(WordXL)    rg_tselect <- mkCSRReg;
-   Reg #(WordXL)    rg_tdata1  <- mkCSRReg;
-   Reg #(WordXL)    rg_tdata2  <- mkCSRReg;
-   Reg #(WordXL)    rg_tdata3  <- mkCSRReg;
-
    // Debug
    Reg #(Bit #(32)) rg_dcsr      <- mkCSRReg;    // Is 32b even in RV64
    Reg #(CapPipe)   rg_dpcc      <- mkCSRReg;
@@ -455,10 +449,15 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    // Initialize some CSRs.
 
    // TODO find a better way of setting this size (first argument is number of CapRegs stored
-   BRAM_DUAL_PORT #(CSR_SCR_RegName, CapReg) bram <- mkBRAMCore2 (15, False);
+   BRAM_DUAL_PORT #(CSR_SCR_RegName, CapReg) bram <- mkBRAMCore2 (31, False);
+
+   // whether the read value should come directly from BRAM or from reading the CSR whose
+   // address is in rg_csr_addr
    Reg #(Bool) rg_read_from_bram <- mkDReg (False);
+
+   // the address of the csr that was last requested in read_req. Used for returning requested
+   // CSR reads a cycle later to improve critical path
    Reg #(CSR_Addr) rg_csr_addr <- mkRegU;
-   Reg #(CapPipe) rg_csr_scr_read_val <- mkRegU;
 
 
    // only use the first port in the BRAM for reads, and only use the second
@@ -467,29 +466,11 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
    let read_port = bram.a;
    let write_port = bram.b;
 
+   // used to iterate through the BRAM to reset SCR values
    Reg #(CSR_SCR_RegName) rg_i <- mkReg (unpack(0));
+
    rule rl_reset_start (rg_state == RF_RESET_START);
-      rg_i <= unpack (0);
-      rg_state <= RF_RESET_LOOP;
-   endrule
-
-   rule rl_reset_loop (rg_state == RF_RESET_LOOP);
-      let next = pack (rg_i) + 1;
-      rg_i <= unpack (next);
-      if (rg_i == SCR_MTCC || rg_i == SCR_MEPCC || rg_i == SCR_STCC || rg_i == SCR_SEPCC) begin
-         write_port.put (True, rg_i, almightyCap);
-      end else begin
-         write_port.put(True, rg_i, nullCap);
-      end
-      if (rg_i == CSR_DSCRATCH1) begin
-         // last register is being reset, go to RF_RESET_FINISH
-         // while we still have it
-         // TODO change this to RF_RUNNING when RF_RESET_FINISH is removed
-         rg_state <= RF_RESET_FINISH;
-      end
-   endrule
-
-   rule rl_reset_finish (rg_state == RF_RESET_FINISH);
+      // reset hardware register values
       // User-level CSRs
 `ifdef ISA_F
       rg_fflags <= 0;
@@ -525,9 +506,6 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 `endif
       rg_mcounteren <= mcounteren_reset_value;
 
-      rg_tselect    <= 0;
-      rg_tdata1     <= 0;    // ISA test rv64mi-p-breakpoint assumes reset value 0.
-
       rw_minstret.wset (0);
 
 `ifdef INCLUDE_GDB_CONTROL
@@ -558,7 +536,28 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
       rg_nmi        <= False;
       rg_nmi_vector <= truncate (soc_map.m_nmivec_reset_value);
 
-      rg_state <= RF_RUNNING;
+      // start looping through the BRAM
+      rg_i <= minBound;
+      rg_state <= RF_RESET_LOOP;
+   endrule
+
+   rule rl_reset_loop (rg_state == RF_RESET_LOOP);
+      case (rg_i)
+         SCR_MTCC, SCR_MEPCC, SCR_STCC, SCR_SEPCC: begin
+            write_port.put (True, rg_i, almightyCap);
+         end
+         default: begin
+            write_port.put(True, rg_i, nullCap);
+         end
+      endcase
+
+      if (rg_i == maxBound) begin
+         // we've just reset the last SCR register, so the reset is finished
+         rg_state <= RF_RUNNING;
+      end
+
+      let next = pack (rg_i) + 1;
+      rg_i <= unpack (next);
    endrule
 
    // ================================================================
@@ -883,11 +882,6 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 	    csr_addr_minstreth: m_csr_value = tagged Valid (rg_minstret [63:32]);
 `endif
 
-	    csr_addr_tselect:  m_csr_value = tagged Valid rg_tselect;
-	    csr_addr_tdata1:   m_csr_value = tagged Valid rg_tdata1;
-	    csr_addr_tdata2:   m_csr_value = tagged Valid rg_tdata2;
-	    csr_addr_tdata3:   m_csr_value = tagged Valid rg_tdata3;
-
 `ifdef INCLUDE_GDB_CONTROL
 	    csr_addr_dcsr:       begin
 				    Bit #(32) dcsr_nmip_mask = 'b_1000;
@@ -1108,28 +1102,6 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 				       rw_minstret.wset (new_csr_value);
 				    end
 `endif
-	       csr_addr_tselect:   begin
-				      // Until we implement trigger functionality,
-				      // return tselect always contains 0
-				      new_csr_value = 0;    // wordxl
-				      rg_tselect   <= new_csr_value;
-				   end
-	       csr_addr_tdata1:    begin
-				      // Until we implement trigger functionality,
-				      // force 'type' field ([xlen-1:xlen-4]) to zero
-				      // meaning: 'There is no trigger at this tselect'
-				      new_csr_value = (wordxl & ('1 >> 4));
-				      rg_tdata1    <= new_csr_value;
-				   end
-	       csr_addr_tdata2:    begin
-				      new_csr_value = wordxl;
-				      rg_tdata2    <= new_csr_value;
-				   end
-	       csr_addr_tdata3:    begin
-				      new_csr_value = wordxl;
-				      rg_tdata3    <= new_csr_value;
-				   end
-
 `ifdef INCLUDE_GDB_CONTROL
 	       csr_addr_dcsr:       begin
 				       Bit #(32) new_dcsr
@@ -1386,6 +1358,7 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 
       // In the cycle before this was called, we would have already selected between STCC and MTCC
       CapPipe xtcc = cast (read_port.read);
+
       WordXL xtcc_offset = getOffset (xtcc);
       let xtvec = word_to_mtvec (xtcc_offset);
 `endif
@@ -1395,6 +1368,7 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 			  : MCause {interrupt: pack (interrupt), exc_code: exc_code});
       let  is_vectored = (xtvec.mode == VECTORED);
 `ifdef ISA_CHERI
+      // only used for debug printing
       Addr exc_pc      = (extend (xtvec.base)) << 2;
 `ifdef ISA_C
       Addr exc_addr    = {truncateLSB (getAddr (xtcc)), 1'b0};
@@ -1413,7 +1387,10 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 `endif
 	 rg_mtval   <= xtval;
 	 rg_mcause  <= xcause;
+         // TODO when CHERI is enabled, exc_pc is only used for debug printing.
 	 exc_pc      = rg_nmi_vector;
+         // potential solution (quite costly)
+         //exc_addr    = getBase (xtcc) + rg_nmi_vector;
 	 is_vectored = False;
       end
       else if (new_priv == m_Priv_Mode) begin
@@ -1452,7 +1429,7 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 `endif
       Addr vector_offset = (extend (exc_code)) << 2;
       if (interrupt && is_vectored) begin
-         // unused in CHERI
+         // unused in CHERI, apart from for debug printing
 	 exc_pc = exc_pc + vector_offset;
 `ifdef ISA_CHERI
          // in RV64, the size of the second operand is 11 bits, so it islarge enough that we can use
