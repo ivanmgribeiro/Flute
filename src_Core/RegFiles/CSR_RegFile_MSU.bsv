@@ -90,9 +90,6 @@ interface CSR_RegFile_IFC;
    // Reset
    interface Server #(Token, Token) server_reset;
 
-   (* always_ready *)
-   method Maybe #(Word) read_csr_port2 (CSR_Addr csr_addr);
-
 `ifdef ISA_F
    // Read FRM
    (* always_ready *)
@@ -1344,11 +1341,6 @@ module mkCSR_RegFile (CSR_RegFile_IFC);
 	 endmethod
       endinterface
    endinterface
-
-   // CSR read (w.o. side effect)
-   method Maybe #(Word) read_csr_port2 (CSR_Addr csr_addr);
-      return fv_csr_read (csr_addr);
-   endmethod
 
    // Read MISA
    method MISA read_misa;
